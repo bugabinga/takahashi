@@ -1,10 +1,10 @@
 //! Test aggregator: the root module for `zig build test` and `zig build fuzz`.
 //!
 //! It is rooted at the project directory (not src/) so integration tests can
-//! `@embedFile` the decks under examples/. It pulls in every raylib-free module
-//! so their tests run without a window backend, a display, or the network. The
-//! raylib window path is verified by building the executable
-//! (`zig build -Dwindow=true`), not here.
+//! `@embedFile` the decks under examples/. It pulls in every window-free module
+//! so their tests run without the sokol backend, a display, or the network. The
+//! sokol window path is verified by building the executable (`zig build`), not
+//! here.
 
 test {
     _ = @import("src/slide.zig");

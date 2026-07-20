@@ -7,7 +7,7 @@ in local and web sessions alike.
 ## Principles
 
 - **Offline and headless.** `zig build test` must never fetch a dependency or
-  open a window. The raylib window backend is excluded from the test graph
+  open a window. The sokol window backend is excluded from the test graph
   (see *Backend seam* below).
 - **Assertions are part of the test.** Builds run in Debug/ReleaseSafe, where
   `std.debug.assert` is live. Following TIGER_STYLE, functions assert their
@@ -22,7 +22,7 @@ in local and web sessions alike.
 
 ### 1. Unit tests — colocated
 
-Every raylib-free module carries `test` blocks next to the code
+Every window-free module carries `test` blocks next to the code
 (`parser.zig`, `cli.zig`, `html.zig`, `presentation.zig`, …) plus a
 `refAllDecls` catch-all so no declaration goes unanalyzed. These cover pure
 logic: paragraph/comment splitting, argument parsing, HTML escaping, slide
@@ -55,11 +55,11 @@ target.
 
 Interactive logic must be testable without a window. Navigation lives in
 `presentation.zig` as a pure state machine (SPEC 2.1) with full unit tests;
-`window.zig` only translates raylib input events into it and draws. raylib is
-reached through the `"raylib"` import, which the build swaps for a no-op stub
-on the default build — so nothing in the test graph ever links raylib. The real
-window path is compile-checked by building the app (`zig build -Dwindow=true`)
-and verified by hand.
+`window.zig` only translates sokol input events into it and draws. The window
+backend uses the vendored sokol libraries and is reached only from
+`window.zig`, which `test.zig` never imports — so nothing in the test graph
+compiles or links sokol/GL. The real window path is compile-checked by building
+the app (`zig build`) and verified by hand on a display.
 
 ## What is *not* automatically tested
 
@@ -75,12 +75,12 @@ and verified by hand.
 | `zig build test` | Unit + integration tests; fuzz targets run once. Offline. |
 | `zig build test --fuzz` | Continuous fuzzing (needs a socket for the coverage UI). |
 | `zig build check` | `zig fmt` formatting gate. |
-| `zig build -Dwindow=true` | Compile-check the raylib window path (needs the dependency). |
+| `zig build` | Build the app, including the sokol window path (needs system GL/X11). |
 | `zig build run -- <deck> --to <form>` | Manual smoke check of a form. |
 
 ## Coverage expectations
 
-- Every raylib-free module has tests and is reachable from `test.zig`.
+- Every window-free module has tests and is reachable from `test.zig`.
 - Every output form has at least one assertion on its serializable output.
 - Every byte-consuming parser has a fuzz target.
 - New behavior lands with the test that would have caught its absence.

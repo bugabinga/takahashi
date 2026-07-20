@@ -19,10 +19,12 @@ Rules for working in this repository.
 
 - Prefer the standard library and language features over bespoke
   reimplementations or third-party dependencies.
-- Reach outside `std` only for capabilities it genuinely lacks — e.g. raylib
-  for GUI windowing (SPEC 3.1). Anything `std` already provides (I/O,
-  containers, hashing, formatting, allocators, argument iteration, process
-  spawning) must go through `std`.
+- Reach outside `std` only for capabilities it genuinely lacks — the vendored
+  sokol libraries for the window form, and system FreeType/HarfBuzz/FFmpeg for
+  text and media (SPEC 3.1). Prefer vendored single-header C or system
+  libraries over Zig package dependencies (see `docs/window-backend.md`).
+  Anything `std` already provides (I/O, containers, hashing, formatting,
+  allocators, argument iteration, process spawning) must go through `std`.
 
 ## Modern Zig idioms (0.16)
 
@@ -39,7 +41,7 @@ Rules for working in this repository.
 - **Formatting:** define a type's `format(self, w: *std.Io.Writer)` method and
   invoke it with the `{f}` specifier; `{t}` prints an enum tag name.
 - **C interop:** through the build system with `b.addTranslateC(...)`, not
-  `@cImport` (removed). See how `build.zig` wires raylib.
+  `@cImport` (removed). See how `build.zig` wires the vendored sokol headers.
 - **Dependencies:** declared in `build.zig.zon`, added with
   `zig fetch --save`, referenced via `b.dependency(...)`.
 
@@ -48,12 +50,12 @@ Rules for working in this repository.
 Full strategy in `docs/TESTING.md`. The hard rules:
 
 - `zig build test` must run **offline and headless** — no dependency fetch, no
-  window. The raylib backend is kept out of the test graph via the `"raylib"`
-  import swap; the test root is `test.zig`.
-- Every raylib-free module has colocated `test` blocks and is reachable from
+  window. The window backend (sokol + system GL/X11) is kept out of the test
+  graph — `test.zig` does not import `window.zig`; the test root is `test.zig`.
+- Every window-free module has colocated `test` blocks and is reachable from
   `test.zig`. New behavior lands with a test.
 - Interactive logic goes in a pure, tested state machine (`presentation.zig`),
-  not in `window.zig`, so it is testable without a backend.
+  not in `window.zig`, so it is testable without the sokol backend.
 - Byte-consuming parsers (`.taka` source, `@run` output) get a
   `std.testing.fuzz` target that must not crash or leak.
 - Integration tests run against the real decks in `examples/`.

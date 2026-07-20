@@ -1,10 +1,9 @@
 // takahashi package manifest.
 //
-// The raylib window backend (SPEC 3.1) is opt-in and fetched on demand — it is
-// deliberately not listed here so the default build and the test suite need no
-// network. To build the window form, add the dependency and enable it:
-//   zig fetch --save git+https://github.com/raysan5/raylib
-//   zig build -Dwindow=true
+// taka has no Zig package dependencies: the window backend (SPEC 3.1) is the
+// vendored sokol single-header C libraries under vendor/, and text/media use
+// system libraries (FreeType, HarfBuzz, FFmpeg) linked at build time. So the
+// build fetches nothing — see docs/window-backend.md for the rationale.
 .{
     .name = .takahashi,
     .version = "0.0.0",
@@ -15,6 +14,7 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "vendor",
         "examples",
         "README.md",
         "SPEC.md",

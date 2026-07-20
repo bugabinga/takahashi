@@ -1,50 +1,70 @@
-//! Window output form (SPEC 3.1): a full-screen graphical presentation driven
-//! by raylib's immediate-mode render loop.
+//! Window output form (SPEC 3.1): a full-screen presentation driven by the
+//! vendored sokol libraries (window + immediate-mode rendering).
 //!
-//! This is a scaffold. It opens a window and draws a placeholder so the raylib
-//! wiring can be exercised. Real slide parsing, text scaling to fill the frame,
-//! and image layout come later.
+//! This is a scaffold: it opens a window, clears each frame, and drives slide
+//! navigation. Drawing slide text scaled to fill the frame (via FreeType +
+//! HarfBuzz), images, audio and video come next.
 
 const std = @import("std");
-
-// The "raylib" module is produced by the build's translate-c step (build.zig).
-const rl = @import("raylib");
+const sk = @import("sokol");
 
 const Deck = @import("slide.zig").Deck;
 const Presentation = @import("presentation.zig").Presentation;
 
 const log = std.log.scoped(.takahashi);
 
-// raylib's colour macros (e.g. BLACK) are compound-literal `#define`s that
-// translate-c drops, so construct `rl.Color` values directly.
-const black = rl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
-const white = rl.Color{ .r = 245, .g = 245, .b = 245, .a = 255 };
+// sokol_app drives a C callback loop (function pointers, no closures), so the
+// deck and navigation state live in file-scope globals for the frame.
+var deck: Deck = .{ .slides = &.{} };
+var show: Presentation = .{ .count = 0 };
 
-/// Present a deck in a full-screen window.
-pub fn present(deck: Deck) void {
-    log.info("presenting {d} slide(s)", .{deck.slides.len});
+pub fn present(presented: Deck) void {
+    deck = presented;
+    show = Presentation.init(presented.slides.len);
+    log.info("presenting {d} slide(s)", .{presented.slides.len});
 
-    rl.InitWindow(1280, 720, "takahashi");
-    defer rl.CloseWindow();
-    rl.SetTargetFPS(60);
-    // TODO: rl.ToggleFullscreen() once the target monitor is selected.
+    var desc: sk.sapp_desc = .{
+        .init_cb = &init,
+        .frame_cb = &frame,
+        .event_cb = &event,
+        .cleanup_cb = &cleanup,
+        .width = 1280,
+        .height = 720,
+        .window_title = "takahashi",
+        .logger = .{ .func = &sk.slog_func },
+    };
+    sk.sapp_run(&desc);
+}
 
-    // Slide navigation (SPEC 2.1) lives in the backend-free Presentation state
-    // machine, which is unit-tested in presentation.zig.
-    var show = Presentation.init(deck.slides.len);
-    while (!rl.WindowShouldClose()) {
-        if (rl.IsKeyPressed(rl.KEY_RIGHT) or rl.IsKeyPressed(rl.KEY_SPACE)) show.next();
-        if (rl.IsKeyPressed(rl.KEY_LEFT)) show.prev();
-        if (rl.IsKeyPressed(rl.KEY_HOME)) show.first();
-        if (rl.IsKeyPressed(rl.KEY_END)) show.last();
-        // TODO: a position indicator; a presenter view surfacing the current
-        // slide's speaker notes.
+fn init() callconv(.c) void {
+    sk.sg_setup(&.{
+        .environment = sk.sglue_environment(),
+        .logger = .{ .func = &sk.slog_func },
+    });
+}
 
-        rl.BeginDrawing();
-        defer rl.EndDrawing();
-        rl.ClearBackground(black);
-        // TODO: draw deck.slides[show.current].body scaled to fill the frame.
-        rl.DrawText("takahashi", 40, 40, 96, white);
-        rl.DrawText("scaffold - press ESC to quit", 40, 160, 32, white);
+fn frame() callconv(.c) void {
+    // TODO: draw deck.slides[show.current].body scaled to fill the frame
+    // (FreeType + HarfBuzz, SPEC 1.2 / 3), plus images, audio and video.
+    var pass: sk.sg_pass = .{ .swapchain = sk.sglue_swapchain() };
+    sk.sg_begin_pass(&pass);
+    sk.sg_end_pass();
+    sk.sg_commit();
+}
+
+fn event(ev: [*c]const sk.sapp_event) callconv(.c) void {
+    if (ev.*.type != sk.SAPP_EVENTTYPE_KEY_DOWN) return;
+    // Navigation (SPEC 2.1) delegates to the tested Presentation state machine.
+    switch (ev.*.key_code) {
+        sk.SAPP_KEYCODE_RIGHT, sk.SAPP_KEYCODE_SPACE => show.next(),
+        sk.SAPP_KEYCODE_LEFT => show.prev(),
+        sk.SAPP_KEYCODE_HOME => show.first(),
+        sk.SAPP_KEYCODE_END => show.last(),
+        sk.SAPP_KEYCODE_ESCAPE => sk.sapp_request_quit(),
+        else => {},
     }
+}
+
+fn cleanup() callconv(.c) void {
+    sk.sg_shutdown();
 }
