@@ -1,18 +1,20 @@
 const std = @import("std");
 const log = std.log.scoped(.takahashi);
 
-pub fn main() anyerror!void {
-    log.info("START",.{});
-    defer log.info("END",.{});
+/// As of Zig 0.16 the runtime hands `main` a `std.process.Init`, which carries
+/// the command line arguments, an I/O implementation and a default general
+/// purpose allocator (with leak checking in Debug builds).
+pub fn main(init: std.process.Init) !void {
+    log.info("START", .{});
+    defer log.info("END", .{});
 
-    //nani de fuck does this syntax mean ?!?!
-    const general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
-    var arguments = std.process.args();
-    var allocator = general_purpose_allocator.allocator;
-    while ( arguments.next(&allocator)) | argument | {
-        var arg = try argument;
-        defer allocator.free(arg);
-        log.info("type of arg 1 -> {any}", .{ @typeInfo(@TypeOf(arg)) });
-        log.info("Arg 1: {s}", .{ arg });
+    // The argument iterator may allocate on some targets (Windows, WASI), so
+    // it owns backing memory that must be released with `deinit`.
+    var arguments = try init.minimal.args.iterateAllocator(init.gpa);
+    defer arguments.deinit();
+
+    var index: usize = 0;
+    while (arguments.next()) |argument| : (index += 1) {
+        log.info("arg {d}: {s}", .{ index, argument });
     }
 }
