@@ -1,29 +1,21 @@
 // takahashi package manifest.
 //
-// This scaffold cannot be finalised offline (no network access to the raylib
-// repository). To complete it locally:
-//   1. zig fetch --save git+https://github.com/raysan5/raylib
-//      — pins the raylib `.url` and `.hash` in the .dependencies block below.
-//   2. zig build
-//      — if Zig reports a fingerprint mismatch, paste the value it prints
-//        into the `.fingerprint` field.
+// The raylib window backend (SPEC 3.1) is opt-in and fetched on demand — it is
+// deliberately not listed here so the default build and the test suite need no
+// network. To build the window form, add the dependency and enable it:
+//   zig fetch --save git+https://github.com/raysan5/raylib
+//   zig build -Dwindow=true
 .{
     .name = .takahashi,
     .version = "0.0.0",
-    .fingerprint = 0x0, // replace with the value `zig build` prints
+    .fingerprint = 0xf83ba002c397a298,
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{
-        // raylib provides the immediate-mode windowing and rendering backend
-        // for the window output form (SPEC 3.1).
-        .raylib = .{
-            .url = "git+https://github.com/raysan5/raylib",
-            .hash = "REPLACE_VIA_zig_fetch_save",
-        },
-    },
+    .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "examples",
         "README.md",
         "SPEC.md",
     },

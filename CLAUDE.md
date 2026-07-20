@@ -43,6 +43,22 @@ Rules for working in this repository.
 - **Dependencies:** declared in `build.zig.zon`, added with
   `zig fetch --save`, referenced via `b.dependency(...)`.
 
+## Testing
+
+Full strategy in `docs/TESTING.md`. The hard rules:
+
+- `zig build test` must run **offline and headless** — no dependency fetch, no
+  window. The raylib backend is kept out of the test graph via the `"raylib"`
+  import swap; the test root is `test.zig`.
+- Every raylib-free module has colocated `test` blocks and is reachable from
+  `test.zig`. New behavior lands with a test.
+- Interactive logic goes in a pure, tested state machine (`presentation.zig`),
+  not in `window.zig`, so it is testable without a backend.
+- Byte-consuming parsers (`.taka` source, `@run` output) get a
+  `std.testing.fuzz` target that must not crash or leak.
+- Integration tests run against the real decks in `examples/`.
+- `zig build check` (formatting) and `zig build test` both stay green.
+
 ## Coding style — TigerBeetle (TIGER_STYLE)
 
 Follow TigerBeetle's style guide:

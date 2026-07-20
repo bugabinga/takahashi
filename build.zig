@@ -1,46 +1,50 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    // Standard target options allow the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native.
     const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to
-    // select between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const optimize = b.standardOptimizeOption(.{});
 
-    // raylib supplies the immediate-mode window and renderer for the window
-    // output form (SPEC 3.1). Pin the exact version once with:
+    // The raylib window backend (SPEC 3.1) is opt-in: it pulls a GitHub
+    // dependency that needs a network connection to fetch. Everything else —
+    // building the CLI, the file forms, and the whole test suite — needs
+    // neither raylib nor the network. To build the window form:
     //   zig fetch --save git+https://github.com/raysan5/raylib
-    const raylib_dep = b.dependency("raylib", .{
+    //   zig build -Dwindow=true
+    const build_window = b.option(
+        bool,
+        "window",
+        "Build the raylib window output form (needs the raylib dependency).",
+    ) orelse false;
+
+    const exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const raylib_lib = raylib_dep.artifact("raylib");
+    const exe = b.addExecutable(.{ .name = "takahashi", .root_module = exe_mod });
 
-    // Modern Zig binds C through the build system, not `@cImport` (removed in
-    // 0.16). Translate raylib's header into a Zig module imported as "raylib".
-    const raylib_translate = b.addTranslateC(.{
-        .root_source_file = b.path("src/raylib.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    raylib_translate.addIncludePath(raylib_dep.path("src"));
-    const raylib_mod = raylib_translate.createModule();
-
-    const exe = b.addExecutable(.{
-        .name = "takahashi",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+    // window.zig imports "raylib"; swap what that name resolves to. The real
+    // build translates raylib's header and links the library; the default
+    // build uses a no-op stub, so it compiles and links offline without a
+    // display. main.zig never references raylib either way.
+    if (build_window) {
+        const raylib_dep = b.dependency("raylib", .{ .target = target, .optimize = optimize });
+        const raylib_translate = b.addTranslateC(.{
+            .root_source_file = b.path("src/raylib.h"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "raylib", .module = raylib_mod },
-            },
-        }),
-    });
-    exe.linkLibrary(raylib_lib);
+        });
+        raylib_translate.addIncludePath(raylib_dep.path("src"));
+        exe_mod.addImport("raylib", raylib_translate.createModule());
+        exe_mod.linkLibrary(raylib_dep.artifact("raylib"));
+    } else {
+        const raylib_stub = b.createModule(.{
+            .root_source_file = b.path("src/raylib_stub.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        exe_mod.addImport("raylib", raylib_stub);
+    }
 
     b.installArtifact(exe);
 
@@ -49,22 +53,30 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
-
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // `zig build test` runs the unit tests.
-    const tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "raylib", .module = raylib_mod },
-            },
-        }),
+    // Tests and fuzzing are rooted at src/test.zig, which imports every
+    // raylib-free module. No window backend, no network, no display.
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("test.zig"),
+        .target = target,
+        .optimize = optimize,
     });
-    const run_tests = b.addRunArtifact(tests);
-    const test_step = b.step("test", "Run unit tests");
+
+    const unit_tests = b.addTest(.{ .root_module = test_mod });
+    const run_tests = b.addRunArtifact(unit_tests);
+    // Each `std.testing.fuzz` test runs once here; `zig build test --fuzz`
+    // fuzzes continuously (it serves a coverage UI, so it needs a network
+    // socket available).
+    const test_step = b.step("test", "Run unit and integration tests");
     test_step.dependOn(&run_tests.step);
+
+    // Formatting gate.
+    const fmt = b.addFmt(.{
+        .paths = &.{ "src", "build.zig", "build.zig.zon", "test.zig", "integration_test.zig" },
+        .check = true,
+    });
+    const check_step = b.step("check", "Verify formatting with zig fmt");
+    check_step.dependOn(&fmt.step);
 }

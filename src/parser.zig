@@ -91,6 +91,18 @@ test "paragraphs become slides and comments become notes" {
     try std.testing.expectEqualStrings("", deck.slides[1].notes);
 }
 
+test "fuzz: parsing arbitrary bytes never crashes" {
+    const Context = struct {
+        fn one(_: @This(), smith: *std.testing.Smith) anyerror!void {
+            var buffer: [512]u8 = undefined;
+            const len = smith.sliceWithHash(&buffer, 0);
+            var deck = parse(std.testing.allocator, buffer[0..len]) catch return;
+            deck.deinit(std.testing.allocator);
+        }
+    };
+    try std.testing.fuzz(Context{}, Context.one, .{});
+}
+
 test {
     std.testing.refAllDecls(@This());
 }
