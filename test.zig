@@ -11,9 +11,12 @@ test {
     _ = @import("src/parser.zig");
     _ = @import("src/cli.zig");
     _ = @import("src/presentation.zig");
+    _ = @import("src/markup.zig");
+    _ = @import("src/function.zig");
+    _ = @import("src/run.zig");
+    _ = @import("src/document.zig");
     _ = @import("src/html.zig");
     _ = @import("src/terminal.zig");
     _ = @import("src/pdf.zig");
-    _ = @import("src/run.zig");
     _ = @import("integration_test.zig");
 }

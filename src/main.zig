@@ -3,6 +3,7 @@ const log = std.log.scoped(.takahashi);
 
 const cli = @import("cli.zig");
 const parser = @import("parser.zig");
+const document = @import("document.zig");
 const window = @import("window.zig");
 const terminal = @import("terminal.zig");
 const html = @import("html.zig");
@@ -33,18 +34,32 @@ pub fn main(init: std.process.Init) !void {
     var deck = try parser.parse(gpa, source);
     defer deck.deinit(gpa);
 
+    // Functions resolve relative to the deck's directory (SPEC 1.3).
+    const base_dir = try openBaseDir(io, config.path);
+    var doc = try document.process(gpa, io, base_dir, source, config.path, deck);
+    defer doc.deinit();
+
     switch (config.form) {
-        .window => window.present(deck),
-        .terminal => try terminal.present(io, deck),
+        .window => window.present(gpa, doc.slides),
+        .terminal => try terminal.present(io, doc.slides),
         .html => {
-            const document = try html.render(gpa, deck);
-            defer gpa.free(document);
-            try writeOutput(io, config.out_path, document);
+            const out = try html.render(gpa, doc.slides);
+            defer gpa.free(out);
+            try writeOutput(io, config.out_path, out);
         },
-        .pdf => try pdf.render(gpa, io, deck, config.out_path),
+        .pdf => {
+            const out = try pdf.render(gpa, doc.slides);
+            defer gpa.free(out);
+            try writeOutput(io, config.out_path, out);
+        },
     }
 
     // TODO: watch mode (SPEC 2.2) — when config.watch, re-render on file change.
+}
+
+fn openBaseDir(io: std.Io, file_path: []const u8) !std.Io.Dir {
+    const dir = std.fs.path.dirname(file_path) orelse ".";
+    return std.Io.Dir.cwd().openDir(io, dir, .{});
 }
 
 /// Write a file form's bytes to `out_path`, or to standard output when null.
