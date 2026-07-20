@@ -49,23 +49,29 @@ result before rendering.
 
 Argument rules, shared by all functions:
 
-- Arguments are separated by whitespace or `|`.
+- Arguments are separated by whitespace.
 - Group an argument (e.g. to include whitespace) with `'single quotes'`.
-- Escape a literal `'` or `|` with a leading `\`.
+- Escape a special character (`'`, `|`, `%`) with a leading `\` to use it
+  literally.
 
 Defined functions:
 
 - **`@image(path)`** — includes the image at `path` (relative to the file,
   or absolute). Supported formats: JPEG, PNG, GIF. The image is placed in
   the slide's background layer.
-- **`@system(program args…)`** — runs `program` (resolved via `PATH`) with
-  the given arguments and substitutes its standard output. The file's full
-  contents are piped to the program's standard input. The token `%` expands
-  to the absolute path of the current file; its presence suppresses the
-  stdin piping. Output must be UTF-8 text or a supported image format.
-- **`@pipe(a args… | b args… | …)`** — runs the listed programs as a
-  pipeline, each program's output feeding the next, and substitutes the
-  final output. Same output, quoting, and grouping rules as `@system`.
+- **`@run(command | command | …)`** — runs a command line and substitutes
+  its standard output. A command is a program (resolved via `PATH`)
+  followed by arguments. Commands are joined into a pipeline with `|`, each
+  stage's output feeding the next; a command line with no `|` is a
+  one-stage pipeline — the single-program case. The file's full contents
+  are piped to the first stage's standard input. The token `%` expands to
+  the absolute path of the current file; its presence suppresses the stdin
+  piping. Output must be UTF-8 text or a supported image format.
+
+taka never invokes a shell: it resolves each program via `PATH` and builds
+the pipeline itself. Behaviour therefore does not depend on the user's
+shell — which vary wildly between systems — keeping `@run` predictable and
+portable.
 
 Every function receives the file as it was before any function ran, so
 functions never affect one another's input.
@@ -96,6 +102,20 @@ and a sense of position in the talk. They provide, at minimum:
 - an always-available indication of position (e.g. current slide and total),
 - a presenter affordance surfacing the current slide's speaker notes,
 - a way to quit.
+
+### 2.2 Authoring (watch mode)
+
+While writing a presentation, taka can watch the source file and reflect
+edits without a restart:
+
+- it re-renders whenever the `.taka` file changes on disk,
+- it holds the current position across reloads where possible, so the view
+  stays where the author is working,
+- it reports errors in place and keeps watching, so a mistake pauses the
+  session rather than ending it.
+
+Watch mode is the recommended way to iterate on a deck. It applies to the
+interactive forms and refreshes file forms (§3.3, §3.4) on each change.
 
 ---
 
