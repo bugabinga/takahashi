@@ -10,6 +10,14 @@ pub fn build(b: *std.Build) void {
     // select between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const optimize = b.standardOptimizeOption(.{});
 
+    // raylib supplies the immediate-mode window and renderer for the window
+    // output form. Pin the exact version once with:
+    //   zig fetch --save git+https://github.com/raysan5/raylib
+    const raylib_dep = b.dependency("raylib", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe = b.addExecutable(.{
         .name = "takahashi",
         .root_module = b.createModule(.{
@@ -18,6 +26,10 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+
+    // Link the raylib static library. Its installed headers land on the
+    // include path, so `@cInclude("raylib.h")` resolves in src/raylib.zig.
+    exe.linkLibrary(raylib_dep.artifact("raylib"));
 
     b.installArtifact(exe);
 

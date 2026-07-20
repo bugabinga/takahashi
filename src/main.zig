@@ -1,4 +1,5 @@
 const std = @import("std");
+const window = @import("window.zig");
 const log = std.log.scoped(.takahashi);
 
 /// As of Zig 0.16 the runtime hands `main` a `std.process.Init`, which carries
@@ -13,8 +14,15 @@ pub fn main(init: std.process.Init) !void {
     var arguments = try init.minimal.args.iterateAllocator(init.gpa);
     defer arguments.deinit();
 
-    var index: usize = 0;
-    while (arguments.next()) |argument| : (index += 1) {
-        log.info("arg {d}: {s}", .{ index, argument });
-    }
+    _ = arguments.next(); // program name
+
+    const path = arguments.next() orelse {
+        log.err("usage: takahashi <file.taka>", .{});
+        return error.MissingArgument;
+    };
+
+    // TODO: parse the .taka file into slides (SPEC 1). For now the raylib
+    // window form shows a placeholder so the render path can be exercised
+    // end to end.
+    window.present(path);
 }

@@ -69,7 +69,9 @@ Defined functions:
   piping. Output must be UTF-8 text or a supported image format.
 
 taka never invokes a shell: it resolves each program via `PATH` and builds
-the pipeline itself. Behaviour therefore does not depend on the user's
+the pipeline itself. It splits each stage on whitespace into the program's
+argument vector and passes it verbatim — no word-splitting, globbing, or
+variable expansion. Behaviour therefore does not depend on the user's
 shell — which vary wildly between systems — keeping `@run` predictable and
 portable.
 
