@@ -1,28 +1,57 @@
 const std = @import("std");
-const window = @import("window.zig");
 const log = std.log.scoped(.takahashi);
 
+const cli = @import("cli.zig");
+const parser = @import("parser.zig");
+const window = @import("window.zig");
+const terminal = @import("terminal.zig");
+const html = @import("html.zig");
+const pdf = @import("pdf.zig");
+
 /// As of Zig 0.16 the runtime hands `main` a `std.process.Init`, which carries
-/// the command line arguments, an I/O implementation and a default general
-/// purpose allocator (with leak checking in Debug builds).
+/// the command line arguments, an I/O implementation and allocators.
 pub fn main(init: std.process.Init) !void {
     log.info("START", .{});
     defer log.info("END", .{});
 
-    // The argument iterator may allocate on some targets (Windows, WASI), so
-    // it owns backing memory that must be released with `deinit`.
-    var arguments = try init.minimal.args.iterateAllocator(init.gpa);
-    defer arguments.deinit();
+    const gpa = init.gpa;
+    const io = init.io;
 
-    _ = arguments.next(); // program name
-
-    const path = arguments.next() orelse {
-        log.err("usage: takahashi <file.taka>", .{});
-        return error.MissingArgument;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    const config = cli.parse(args) catch |err| {
+        log.err(
+            "usage: takahashi [--to window|terminal|pdf|html] [-o <path>] [--watch] <file.taka>",
+            .{},
+        );
+        return err;
     };
 
-    // TODO: parse the .taka file into slides (SPEC 1). For now the raylib
-    // window form shows a placeholder so the render path can be exercised
-    // end to end.
-    window.present(path);
+    // TODO: config.path == "-" should read the deck from standard input.
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, config.path, gpa, .unlimited);
+    defer gpa.free(source);
+
+    var deck = try parser.parse(gpa, source);
+    defer deck.deinit(gpa);
+
+    switch (config.form) {
+        .window => window.present(deck),
+        .terminal => try terminal.present(io, deck),
+        .html => {
+            const document = try html.render(gpa, deck);
+            defer gpa.free(document);
+            try writeOutput(io, config.out_path, document);
+        },
+        .pdf => try pdf.render(gpa, io, deck, config.out_path),
+    }
+
+    // TODO: watch mode (SPEC 2.2) — when config.watch, re-render on file change.
+}
+
+/// Write a file form's bytes to `out_path`, or to standard output when null.
+fn writeOutput(io: std.Io, out_path: ?[]const u8, bytes: []const u8) !void {
+    if (out_path) |path| {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    } else {
+        try std.Io.File.stdout().writeStreamingAll(io, bytes);
+    }
 }
