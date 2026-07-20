@@ -6,10 +6,14 @@
 //! and image layout come later.
 
 const std = @import("std");
-const rl = @import("raylib.zig").c;
+
+// The "raylib" module is produced by the build's translate-c step (build.zig).
+const rl = @import("raylib");
 
 const log = std.log.scoped(.takahashi);
 
+// raylib's colour macros (e.g. BLACK) are compound-literal `#define`s that
+// translate-c drops, so construct `rl.Color` values directly.
 const black = rl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
 const white = rl.Color{ .r = 245, .g = 245, .b = 245, .a = 255 };
 

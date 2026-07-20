@@ -11,12 +11,23 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // raylib supplies the immediate-mode window and renderer for the window
-    // output form. Pin the exact version once with:
+    // output form (SPEC 3.1). Pin the exact version once with:
     //   zig fetch --save git+https://github.com/raysan5/raylib
     const raylib_dep = b.dependency("raylib", .{
         .target = target,
         .optimize = optimize,
     });
+    const raylib_lib = raylib_dep.artifact("raylib");
+
+    // Modern Zig binds C through the build system, not `@cImport` (removed in
+    // 0.16). Translate raylib's header into a Zig module imported as "raylib".
+    const raylib_translate = b.addTranslateC(.{
+        .root_source_file = b.path("src/raylib.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    raylib_translate.addIncludePath(raylib_dep.path("src"));
+    const raylib_mod = raylib_translate.createModule();
 
     const exe = b.addExecutable(.{
         .name = "takahashi",
@@ -24,12 +35,12 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "raylib", .module = raylib_mod },
+            },
         }),
     });
-
-    // Link the raylib static library. Its installed headers land on the
-    // include path, so `@cInclude("raylib.h")` resolves in src/raylib.zig.
-    exe.linkLibrary(raylib_dep.artifact("raylib"));
+    exe.linkLibrary(raylib_lib);
 
     b.installArtifact(exe);
 
@@ -41,4 +52,19 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    // `zig build test` runs the unit tests.
+    const tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "raylib", .module = raylib_mod },
+            },
+        }),
+    });
+    const run_tests = b.addRunArtifact(tests);
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_tests.step);
 }
