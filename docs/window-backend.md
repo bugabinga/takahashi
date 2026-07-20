@@ -56,10 +56,15 @@ media link system FreeType/HarfBuzz/FFmpeg. The SessionStart hook installs those
 
 ## Status
 
-- Done: sokol vendored and wired; the window opens and draws the current slide's
-  text (via `sokol_debugtext`), navigated through the tested `presentation.zig`.
-  The full pipeline runs end to end — markup, `@run`, `@image/@audio/@video` —
-  across the terminal, HTML (self-contained, images as data URIs) and PDF forms.
-- Next: replace the `sokol_debugtext` bitmap font with proportional, scaled,
-  CJK-aware text via FreeType + HarfBuzz (SPEC 1.2 / 3); draw images on slides
-  via stb_image; play `@audio` via miniaudio; decode `@video` via FFmpeg.
+Complete. The window form renders slides with proportional, scaled, CJK-aware
+text (FreeType + HarfBuzz), images laid out in an equal grid (stb_image), video
+playing in the background (FFmpeg), and audio on entry (miniaudio) — navigated
+through the tested `presentation.zig`. The four media subsystems live in
+`src/{text,image,audio,video}.zig` (GPU-independent: they return pixels /
+vertices / PCM that `window.zig` uploads via sokol_gl). The full pipeline —
+markup, `@run`, `@image/@audio/@video` — also drives the terminal, HTML
+(self-contained) and PDF forms.
+
+Tests: `zig build test` stays offline (32 logic/integration tests); the media
+modules link system libraries and read fixtures, so they run under
+`zig build test-media` (verified: text incl. Japanese, image, video, audio).

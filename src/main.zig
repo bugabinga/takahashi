@@ -35,12 +35,13 @@ pub fn main(init: std.process.Init) !void {
     defer deck.deinit(gpa);
 
     // Functions resolve relative to the deck's directory (SPEC 1.3).
-    const base_dir = try openBaseDir(io, config.path);
+    const deck_dir = std.fs.path.dirname(config.path) orelse ".";
+    const base_dir = try std.Io.Dir.cwd().openDir(io, deck_dir, .{});
     var doc = try document.process(gpa, io, base_dir, source, config.path, deck);
     defer doc.deinit();
 
     switch (config.form) {
-        .window => window.present(gpa, doc.slides),
+        .window => window.present(gpa, io, base_dir, deck_dir, doc.slides),
         .terminal => try terminal.present(io, doc.slides),
         .html => {
             const out = try html.render(gpa, doc.slides);
@@ -55,11 +56,6 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // TODO: watch mode (SPEC 2.2) — when config.watch, re-render on file change.
-}
-
-fn openBaseDir(io: std.Io, file_path: []const u8) !std.Io.Dir {
-    const dir = std.fs.path.dirname(file_path) orelse ".";
-    return std.Io.Dir.cwd().openDir(io, dir, .{});
 }
 
 /// Write a file form's bytes to `out_path`, or to standard output when null.

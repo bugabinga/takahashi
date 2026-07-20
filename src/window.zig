@@ -1,27 +1,81 @@
 //! Window output form (SPEC 3.1): a full-screen presentation via the vendored
-//! sokol libraries. Text is drawn large with sokol_debugtext and navigated
-//! through the tested Presentation state machine.
-//!
-//! Scaffold: sokol_debugtext is an ASCII bitmap font, so this renders the deck
-//! blocky and Latin-only. Proportional, scaled, CJK-aware text via FreeType +
-//! HarfBuzz (SPEC 1.2 / 3), plus images, audio and video, come next.
+//! sokol libraries. Text is rendered with FreeType + HarfBuzz (proportional,
+//! scaled to fill the frame, CJK-aware), images are laid out in an equal grid
+//! behind the text, video plays in the background, and audio plays on entry.
 
 const std = @import("std");
 const sk = @import("sokol");
 
 const document = @import("document.zig");
 const Presentation = @import("presentation.zig").Presentation;
+const text = @import("text.zig");
+const image = @import("image.zig");
+const audio = @import("audio.zig");
+const video = @import("video.zig");
 
 const log = std.log.scoped(.takahashi);
+const padding_px: f32 = 48;
 
-// sokol_app drives a C callback loop (no closures), so slide text and the
-// navigation state live in file-scope globals for the frame.
-var texts: []const []const u8 = &.{};
-var show: Presentation = .{ .count = 0 };
+// sokol_app drives a C callback loop (no closures), so state lives at file scope.
+const State = struct {
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    base_dir: std.Io.Dir,
+    deck_dir: []const u8,
+    slides: []const document.Slide,
+    show: Presentation,
+    renderer: text.Renderer,
+    player: audio.Player,
+    sampler: sk.sg_sampler = .{},
+    pipeline: sk.sgl_pipeline = .{},
+    // Resources for the slide currently on screen; rebuilt on slide/size change.
+    arena: std.heap.ArenaAllocator,
+    prepared: ?usize = null,
+    prepared_w: i32 = 0,
+    prepared_h: i32 = 0,
+    text_tex: ?Texture = null,
+    text_vertices: []const text.Vertex = &.{},
+    images: []ImageDraw = &.{},
+    decoder: ?video.Decoder = null,
+    video_tex: ?Texture = null,
+};
 
-pub fn present(gpa: std.mem.Allocator, slides: []const document.Slide) void {
-    texts = flatten(gpa, slides) catch &.{};
-    show = Presentation.init(slides.len);
+const Texture = struct {
+    image: sk.sg_image,
+    view: sk.sg_view,
+
+    fn destroy(self: Texture) void {
+        sk.sg_destroy_view(self.view);
+        sk.sg_destroy_image(self.image);
+    }
+};
+
+const ImageDraw = struct { tex: Texture, x0: f32, y0: f32, x1: f32, y1: f32 };
+
+var state: State = undefined;
+
+pub fn present(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    base_dir: std.Io.Dir,
+    deck_dir: []const u8,
+    slides: []const document.Slide,
+) void {
+    const renderer = text.init(gpa) catch |err| {
+        log.err("font init failed: {t}", .{err});
+        return;
+    };
+    state = .{
+        .gpa = gpa,
+        .io = io,
+        .base_dir = base_dir,
+        .deck_dir = deck_dir,
+        .slides = slides,
+        .show = Presentation.init(slides.len),
+        .renderer = renderer,
+        .player = audio.Player.init() catch .{},
+        .arena = std.heap.ArenaAllocator.init(gpa),
+    };
     log.info("presenting {d} slide(s)", .{slides.len});
 
     var desc: sk.sapp_desc = .{
@@ -37,98 +91,251 @@ pub fn present(gpa: std.mem.Allocator, slides: []const document.Slide) void {
     sk.sapp_run(&desc);
 }
 
-// The small canvas fits roughly this many bitmap columns across the frame.
-const wrap_columns = 19;
-
-/// Flatten each slide's styled spans to plain text and wrap it to the frame
-/// width for the bitmap renderer.
-fn flatten(gpa: std.mem.Allocator, slides: []const document.Slide) ![]const []const u8 {
-    const out = try gpa.alloc([]const u8, slides.len);
-    for (slides, 0..) |slide, i| {
-        var plain: std.ArrayList(u8) = .empty;
-        defer plain.deinit(gpa);
-        for (slide.spans) |span| try plain.appendSlice(gpa, span.text);
-        out[i] = try wrap(gpa, plain.items, wrap_columns);
-    }
-    return out;
-}
-
-/// Greedy word wrap that keeps existing line breaks.
-fn wrap(gpa: std.mem.Allocator, text: []const u8, columns: usize) ![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    var column: usize = 0;
-    var lines = std.mem.splitScalar(u8, text, '\n');
-    var first_line = true;
-    while (lines.next()) |line| {
-        if (!first_line) {
-            try out.append(gpa, '\n');
-            column = 0;
-        }
-        first_line = false;
-        var words = std.mem.tokenizeScalar(u8, line, ' ');
-        var first_word = true;
-        while (words.next()) |word| {
-            if (!first_word and column + 1 + word.len > columns) {
-                try out.append(gpa, '\n');
-                column = 0;
-                first_word = true;
-            }
-            if (!first_word) {
-                try out.append(gpa, ' ');
-                column += 1;
-            }
-            try out.appendSlice(gpa, word);
-            column += word.len;
-            first_word = false;
-        }
-    }
-    return out.toOwnedSlice(gpa);
-}
-
 fn init() callconv(.c) void {
     sk.sg_setup(&.{
         .environment = sk.sglue_environment(),
         .logger = .{ .func = &sk.slog_func },
     });
-    var text_desc: sk.sdtx_desc_t = .{ .logger = .{ .func = &sk.slog_func } };
-    text_desc.fonts[0] = sk.sdtx_font_c64();
-    sk.sdtx_setup(&text_desc);
+    sk.sgl_setup(&.{ .logger = .{ .func = &sk.slog_func } });
+
+    var sampler_desc: sk.sg_sampler_desc = .{};
+    sampler_desc.min_filter = @intCast(sk.SG_FILTER_LINEAR);
+    sampler_desc.mag_filter = @intCast(sk.SG_FILTER_LINEAR);
+    state.sampler = sk.sg_make_sampler(&sampler_desc);
+
+    var pip_desc: sk.sg_pipeline_desc = .{};
+    pip_desc.colors[0].blend.enabled = true;
+    pip_desc.colors[0].blend.src_factor_rgb = @intCast(sk.SG_BLENDFACTOR_SRC_ALPHA);
+    pip_desc.colors[0].blend.dst_factor_rgb = @intCast(sk.SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA);
+    pip_desc.colors[0].blend.src_factor_alpha = @intCast(sk.SG_BLENDFACTOR_SRC_ALPHA);
+    pip_desc.colors[0].blend.dst_factor_alpha = @intCast(sk.SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA);
+    state.pipeline = sk.sgl_make_pipeline(&pip_desc);
 }
 
 fn frame() callconv(.c) void {
-    // A small canvas magnifies the 8x8 font, so text fills the frame (SPEC 3).
-    sk.sdtx_canvas(sk.sapp_widthf() / 8.0, sk.sapp_heightf() / 8.0);
-    sk.sdtx_origin(1, 1);
-    sk.sdtx_font(0);
-    sk.sdtx_color3b(245, 245, 245);
-    if (show.current < texts.len) {
-        const text = texts[show.current];
-        sk.sdtx_putr(text.ptr, @intCast(text.len));
+    const w = sk.sapp_width();
+    const h = sk.sapp_height();
+    if (state.prepared != state.show.current or state.prepared_w != w or state.prepared_h != h) {
+        prepareSlide(w, h);
     }
+    advanceVideo();
+
+    sk.sgl_defaults();
+    sk.sgl_load_pipeline(state.pipeline);
+    sk.sgl_matrix_mode_projection();
+    sk.sgl_load_identity();
+    sk.sgl_ortho(0, @floatFromInt(w), @floatFromInt(h), 0, -1, 1);
+    sk.sgl_enable_texture();
+
+    // Background layer: images (SPEC 1.3) then video, text on top (SPEC 3).
+    for (state.images) |img| {
+        drawRect(img.tex.view, img.x0, img.y0, img.x1, img.y1);
+    }
+    if (state.video_tex) |tex| {
+        drawRect(tex.view, 0, 0, @floatFromInt(w), @floatFromInt(h));
+    }
+    if (state.text_tex) |tex| drawGlyphs(tex.view, state.text_vertices);
 
     var pass: sk.sg_pass = .{ .swapchain = sk.sglue_swapchain() };
     pass.action.colors[0].load_action = @intCast(sk.SG_LOADACTION_CLEAR);
     pass.action.colors[0].clear_value = .{ .r = 0, .g = 0, .b = 0, .a = 1 };
     sk.sg_begin_pass(&pass);
-    sk.sdtx_draw();
+    sk.sgl_draw();
     sk.sg_end_pass();
     sk.sg_commit();
 }
 
 fn event(ev: [*c]const sk.sapp_event) callconv(.c) void {
     if (ev.*.type != sk.SAPP_EVENTTYPE_KEY_DOWN) return;
-    // Navigation (SPEC 2.1) delegates to the tested Presentation state machine.
     switch (ev.*.key_code) {
-        sk.SAPP_KEYCODE_RIGHT, sk.SAPP_KEYCODE_SPACE => show.next(),
-        sk.SAPP_KEYCODE_LEFT => show.prev(),
-        sk.SAPP_KEYCODE_HOME => show.first(),
-        sk.SAPP_KEYCODE_END => show.last(),
+        sk.SAPP_KEYCODE_RIGHT, sk.SAPP_KEYCODE_SPACE => state.show.next(),
+        sk.SAPP_KEYCODE_LEFT => state.show.prev(),
+        sk.SAPP_KEYCODE_HOME => state.show.first(),
+        sk.SAPP_KEYCODE_END => state.show.last(),
         sk.SAPP_KEYCODE_ESCAPE => sk.sapp_request_quit(),
         else => {},
     }
 }
 
 fn cleanup() callconv(.c) void {
-    sk.sdtx_shutdown();
+    releaseSlide();
+    state.player.deinit();
+    text.deinit(&state.renderer, state.gpa);
+    state.arena.deinit();
+    sk.sgl_shutdown();
     sk.sg_shutdown();
+}
+
+/// Free the GPU resources and decoder held for the previous slide.
+fn releaseSlide() void {
+    if (state.text_tex) |tex| tex.destroy();
+    state.text_tex = null;
+    for (state.images) |img| img.tex.destroy();
+    state.images = &.{};
+    if (state.video_tex) |tex| tex.destroy();
+    state.video_tex = null;
+    if (state.decoder) |*dec| video.deinit(dec, state.gpa);
+    state.decoder = null;
+}
+
+fn prepareSlide(w: i32, h: i32) void {
+    releaseSlide();
+    _ = state.arena.reset(.retain_capacity);
+    const arena = state.arena.allocator();
+    const slide = state.slides[state.show.current];
+
+    layoutText(arena, slide, w, h);
+    layoutImages(slide, w, h);
+    startMedia(arena, slide);
+
+    state.prepared = state.show.current;
+    state.prepared_w = w;
+    state.prepared_h = h;
+}
+
+fn layoutText(arena: std.mem.Allocator, slide: document.Slide, w: i32, h: i32) void {
+    const layout = text.layoutFit(
+        &state.renderer,
+        arena,
+        slide.spans,
+        @floatFromInt(w),
+        @floatFromInt(h),
+        padding_px,
+    ) catch |err| {
+        log.warn("text layout failed: {t}", .{err});
+        return;
+    };
+    if (layout.vertices.len == 0) return;
+    const rgba = expandCoverage(arena, layout.atlas) catch return;
+    state.text_tex = uploadTexture(rgba, layout.atlas_w, layout.atlas_h);
+    state.text_vertices = layout.vertices;
+}
+
+/// Decode each image and place it in an equal-weighted grid (SPEC 1.3).
+fn layoutImages(slide: document.Slide, w: i32, h: i32) void {
+    var count: usize = 0;
+    for (slide.media) |m| {
+        if (m.kind == .image) count += 1;
+    }
+    if (count == 0) return;
+
+    var draws = state.gpa.alloc(ImageDraw, count) catch return;
+    var n: usize = 0;
+    const cols = columnsFor(count);
+    const rows = (count + cols - 1) / cols;
+    const cell_w = @as(f32, @floatFromInt(w)) / @as(f32, @floatFromInt(cols));
+    const cell_h = @as(f32, @floatFromInt(h)) / @as(f32, @floatFromInt(rows));
+
+    for (slide.media) |m| {
+        if (m.kind != .image) continue;
+        const img = image.decodeFile(state.gpa, state.io, state.base_dir, m.path) catch |err| {
+            log.warn("image {s} failed: {t}", .{ m.path, err });
+            continue;
+        };
+        defer image.free(state.gpa, img);
+        const tex = uploadTexture(img.pixels, img.w, img.h);
+        const col = n % cols;
+        const row = n / cols;
+        const rect = fitRect(
+            @floatFromInt(col),
+            @floatFromInt(row),
+            cell_w,
+            cell_h,
+            @floatFromInt(img.w),
+            @floatFromInt(img.h),
+        );
+        draws[n] = .{ .tex = tex, .x0 = rect[0], .y0 = rect[1], .x1 = rect[2], .y1 = rect[3] };
+        n += 1;
+    }
+    state.images = draws[0..n];
+}
+
+fn startMedia(arena: std.mem.Allocator, slide: document.Slide) void {
+    for (slide.media) |m| {
+        const full = std.fs.path.joinZ(arena, &.{ state.deck_dir, m.path }) catch continue;
+        switch (m.kind) {
+            .audio => state.player.play(full),
+            .video => {
+                if (state.decoder != null) continue;
+                state.decoder = video.open(state.gpa, full) catch |err| {
+                    log.warn("video {s} failed: {t}", .{ m.path, err });
+                    continue;
+                };
+            },
+            .image => {},
+        }
+    }
+}
+
+fn advanceVideo() void {
+    const dec = &(state.decoder orelse return);
+    const frame_data = video.next(dec, state.gpa) catch return;
+    const f = frame_data orelse {
+        // Loop the clip.
+        video.deinit(dec, state.gpa);
+        state.decoder = null;
+        return;
+    };
+    defer state.gpa.free(f.pixels);
+    if (state.video_tex) |tex| tex.destroy();
+    state.video_tex = uploadTexture(f.pixels, f.w, f.h);
+}
+
+fn drawRect(view: sk.sg_view, x0: f32, y0: f32, x1: f32, y1: f32) void {
+    sk.sgl_texture(view, state.sampler);
+    sk.sgl_c4b(255, 255, 255, 255);
+    sk.sgl_begin_triangles();
+    sk.sgl_v2f_t2f(x0, y0, 0, 0);
+    sk.sgl_v2f_t2f(x1, y0, 1, 0);
+    sk.sgl_v2f_t2f(x1, y1, 1, 1);
+    sk.sgl_v2f_t2f(x0, y0, 0, 0);
+    sk.sgl_v2f_t2f(x1, y1, 1, 1);
+    sk.sgl_v2f_t2f(x0, y1, 0, 1);
+    sk.sgl_end();
+}
+
+fn drawGlyphs(view: sk.sg_view, vertices: []const text.Vertex) void {
+    sk.sgl_texture(view, state.sampler);
+    sk.sgl_c4b(245, 245, 245, 255);
+    sk.sgl_begin_triangles();
+    for (vertices) |v| sk.sgl_v2f_t2f(v.x, v.y, v.u, v.v);
+    sk.sgl_end();
+}
+
+fn uploadTexture(pixels: []const u8, w: u32, h: u32) Texture {
+    var img_desc: sk.sg_image_desc = .{ .width = @intCast(w), .height = @intCast(h) };
+    img_desc.pixel_format = @intCast(sk.SG_PIXELFORMAT_RGBA8);
+    img_desc.data.mip_levels[0] = .{ .ptr = pixels.ptr, .size = pixels.len };
+    const img = sk.sg_make_image(&img_desc);
+    var view_desc: sk.sg_view_desc = .{};
+    view_desc.texture.image = img;
+    return .{ .image = img, .view = sk.sg_make_view(&view_desc) };
+}
+
+/// Expand an 8-bit coverage atlas to white RGBA with coverage as alpha.
+fn expandCoverage(arena: std.mem.Allocator, coverage: []const u8) ![]u8 {
+    const rgba = try arena.alloc(u8, coverage.len * 4);
+    for (coverage, 0..) |c, i| {
+        rgba[i * 4 + 0] = 255;
+        rgba[i * 4 + 1] = 255;
+        rgba[i * 4 + 2] = 255;
+        rgba[i * 4 + 3] = c;
+    }
+    return rgba;
+}
+
+fn columnsFor(count: usize) usize {
+    var cols: usize = 1;
+    while (cols * cols < count) cols += 1;
+    return cols;
+}
+
+/// Fit a w_px x h_px image into a grid cell, preserving aspect ratio, centered.
+fn fitRect(col: f32, row: f32, cell_w: f32, cell_h: f32, w_px: f32, h_px: f32) [4]f32 {
+    const scale = @min(cell_w / w_px, cell_h / h_px);
+    const dw = w_px * scale;
+    const dh = h_px * scale;
+    const x0 = col * cell_w + (cell_w - dw) / 2;
+    const y0 = row * cell_h + (cell_h - dh) / 2;
+    return .{ x0, y0, x0 + dw, y0 + dh };
 }
