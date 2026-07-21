@@ -73,6 +73,19 @@ pub fn build(b: *std.Build) void {
     const media_step = b.step("test-media", "Run media module tests (needs system libs + fonts)");
     media_step.dependOn(&run_media.step);
 
+    // Microbenchmarks — always ReleaseFast, independent of -Doptimize.
+    const bench_exe = b.addExecutable(.{
+        .name = "bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    const run_bench = b.addRunArtifact(bench_exe);
+    const bench_step = b.step("bench", "Run parser/markup microbenchmarks (ReleaseFast)");
+    bench_step.dependOn(&run_bench.step);
+
     // Formatting gate.
     const fmt = b.addFmt(.{
         .paths = &.{

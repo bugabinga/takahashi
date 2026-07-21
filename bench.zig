@@ -78,6 +78,37 @@ fn minTimeSlides(io: std.Io, arena: *std.heap.ArenaAllocator, bodies: []const []
     return best;
 }
 
+const thread_chunks = 8;
+
+fn markupChunk(bodies: []const []const u8, backing: std.mem.Allocator) std.Io.Cancelable!void {
+    var arena = std.heap.ArenaAllocator.init(backing);
+    defer arena.deinit();
+    for (bodies) |body| {
+        const spans = markup.parse(arena.allocator(), body) catch return;
+        std.mem.doNotOptimizeAway(spans.len);
+    }
+}
+
+fn minTimeThreaded(io: std.Io, bodies: []const []const u8) !u64 {
+    var best: u64 = std.math.maxInt(u64);
+    const chunk = (bodies.len + thread_chunks - 1) / thread_chunks;
+    var n: usize = 0;
+    while (n < iterations) : (n += 1) {
+        const start = readNs(io);
+        var group: std.Io.Group = .init;
+        for (0..thread_chunks) |c| {
+            const lo = c * chunk;
+            const hi = @min(lo + chunk, bodies.len);
+            if (lo >= hi) break;
+            group.async(io, markupChunk, .{ bodies[lo..hi], std.heap.page_allocator });
+        }
+        try group.await(io);
+        const elapsed = readNs(io) - start;
+        if (elapsed < best) best = elapsed;
+    }
+    return best;
+}
+
 fn runParse(a: std.mem.Allocator, source: []const u8) !void {
     const deck = try parser.parse(a, source);
     std.mem.doNotOptimizeAway(deck.slides.len);
@@ -137,7 +168,10 @@ pub fn main(init: std.process.Init) !void {
         body_bytes += slide.body.len;
     }
     const t_slides = try minTimeSlides(io, &arena, bodies);
-    report("markup", t_slides, body_bytes); // per-slide (realistic)
+    report("markup", t_slides, body_bytes); // per-slide (realistic), single-thread
+
+    const t_threaded = try minTimeThreaded(io, bodies);
+    report("markup/8t", t_threaded, body_bytes); // per-slide across 8 threads
 
     // Peak arena bytes for one full parse+markup pass (memory proxy).
     _ = arena.reset(.free_all);
@@ -148,5 +182,13 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print(
         "\nmem (parse+markup, one pass): {d:.2} MiB arena, {d} slides\n",
         .{ @as(f64, @floatFromInt(arena.queryCapacity())) / (1 << 20), mem_deck.slides.len },
+    );
+
+    // Markup-only arena footprint (isolates the markup allocator from parse).
+    _ = arena.reset(.free_all);
+    for (bodies) |body| _ = try markup.parse(arena.allocator(), body);
+    std.debug.print(
+        "mem (markup only, one pass):  {d:.2} MiB arena\n",
+        .{@as(f64, @floatFromInt(arena.queryCapacity())) / (1 << 20)},
     );
 }

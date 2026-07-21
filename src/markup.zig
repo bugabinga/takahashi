@@ -40,76 +40,108 @@ fn markerStyle(byte: u8, style: *Style) void {
     }
 }
 
-/// Parse `text` into styled spans. Span text is copied into `arena`.
+// Bytes that can begin markup work: the six markers plus the escape.
+const special = markers ++ "\\";
+
+/// SIMD scan: does `text` contain any marker or backslash? The overwhelmingly
+/// common slide body has none, so this fast-paths to a single borrowed span.
+fn containsSpecial(text: []const u8) bool {
+    const lanes = comptime std.simd.suggestVectorLength(u8) orelse 16;
+    const Block = @Vector(lanes, u8);
+    var i: usize = 0;
+    while (i + lanes <= text.len) : (i += lanes) {
+        const block: Block = text[i..][0..lanes].*;
+        var hit: @Vector(lanes, bool) = @splat(false);
+        inline for (special) |d| hit = hit | (block == @as(Block, @splat(d)));
+        if (@reduce(.Or, hit)) return true;
+    }
+    while (i < text.len) : (i += 1) {
+        inline for (special) |d| if (text[i] == d) return true;
+    }
+    return false;
+}
+
+/// Parse `text` into styled spans. Span text borrows `text` where no escape
+/// intervenes; escaped spans are copied into `arena`.
 pub fn parse(arena: Allocator, text: []const u8) Allocator.Error![]const Span {
-    // Pass 1: classify each byte position as an active (paired) marker or not.
-    // A byte is an active marker only if it is an unescaped marker whose count
-    // of unescaped occurrences seen so far pairs it with a later one.
-    var active = try arena.alloc(bool, text.len);
-    @memset(active, false);
+    if (text.len == 0) return &.{};
+    // Fast path: no markers and no escapes — the whole text is one span, no
+    // per-byte work and no allocation beyond the one-element array.
+    if (!containsSpecial(text)) {
+        const spans = try arena.alloc(Span, 1);
+        spans[0] = .{ .text = text, .style = .{} };
+        return spans;
+    }
+
+    // A backslash escapes the following byte (and is consumed), so it cannot
+    // escape a byte that is itself escaped: `\\*` frees the `*`.
+    var escaped: std.DynamicBitSetUnmanaged = try .initEmpty(arena, text.len);
+    var pos: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, text, pos, '\\')) |bs| {
+        if (bs + 1 < text.len) escaped.set(bs + 1);
+        pos = bs + 2;
+    }
+
+    // Pair each marker with markdown-style boundaries (SIMD jumps between
+    // occurrences); record the paired positions as the active markers.
+    var active: std.DynamicBitSetUnmanaged = try .initEmpty(arena, text.len);
     inline for (markers) |m| {
         var open: ?usize = null;
-        var i: usize = 0;
-        while (i < text.len) : (i += 1) {
-            if (text[i] == '\\') {
-                i += 1; // skip the escaped byte
-                continue;
-            }
-            if (text[i] != m) continue;
-            // Markdown-style boundaries: an opener follows start/whitespace and
-            // precedes non-whitespace; a closer follows non-whitespace. This
-            // keeps stray markers in ordinary text literal — `http://x`,
-            // `Made-Easy` — while still styling `*bold*` and `/italic/`.
+        var at: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, text, at, m)) |i| {
+            at = i + 1;
+            if (escaped.isSet(i)) continue;
             const before_space = i == 0 or isSpace(text[i - 1]);
             const after_space = i + 1 >= text.len or isSpace(text[i + 1]);
-            const can_open = before_space and !after_space;
-            const can_close = !before_space;
             if (open) |o| {
-                if (can_close) {
-                    active[o] = true;
-                    active[i] = true;
+                if (!before_space) { // can close
+                    active.set(o);
+                    active.set(i);
                     open = null;
-                } else if (can_open) {
+                } else if (!after_space) {
                     open = i;
                 }
-            } else if (can_open) {
+            } else if (before_space and !after_space) {
                 open = i;
             }
         }
     }
 
     var spans: std.ArrayList(Span) = .empty;
-    var buffer: std.ArrayList(u8) = .empty;
     var style: Style = .{};
-
-    var i: usize = 0;
-    while (i < text.len) : (i += 1) {
-        if (text[i] == '\\' and i + 1 < text.len) {
-            try buffer.append(arena, text[i + 1]);
-            i += 1;
-            continue;
-        }
-        if (active[i]) {
-            try flush(arena, &spans, &buffer, style);
-            markerStyle(text[i], &style);
-            continue;
-        }
-        try buffer.append(arena, text[i]);
+    var span_start: usize = 0;
+    var it = active.iterator(.{});
+    while (it.next()) |i| {
+        try emitSpan(arena, &spans, text[span_start..i], style);
+        markerStyle(text[i], &style);
+        span_start = i + 1;
     }
-    try flush(arena, &spans, &buffer, style);
-
+    try emitSpan(arena, &spans, text[span_start..], style);
     return spans.toOwnedSlice(arena);
 }
 
-fn flush(
+/// Emit one span. Borrows `region` when it has no escape; otherwise copies it
+/// into `arena` with escaping backslashes removed. Empty regions are dropped.
+fn emitSpan(
     arena: Allocator,
     spans: *std.ArrayList(Span),
-    buffer: *std.ArrayList(u8),
+    region: []const u8,
     style: Style,
 ) Allocator.Error!void {
-    if (buffer.items.len == 0) return;
-    const owned = try buffer.toOwnedSlice(arena);
-    try spans.append(arena, .{ .text = owned, .style = style });
+    if (region.len == 0) return;
+    if (std.mem.indexOfScalar(u8, region, '\\') == null) {
+        try spans.append(arena, .{ .text = region, .style = style });
+        return;
+    }
+    const buffer = try arena.alloc(u8, region.len);
+    var n: usize = 0;
+    var j: usize = 0;
+    while (j < region.len) : (j += 1) {
+        if (region[j] == '\\' and j + 1 < region.len) j += 1;
+        buffer[n] = region[j];
+        n += 1;
+    }
+    try spans.append(arena, .{ .text = buffer[0..n], .style = style });
 }
 
 test "plain text is one unstyled span" {
