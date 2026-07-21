@@ -3,5 +3,9 @@
 Contains example presentations.
 These also get used during integration tests.
 
+`demo/demo.taka` is a guided tour that exercises every feature (markup,
+`@image`/`@audio`/`@video`/`@run`, comments, CJK) — it is the deck recorded
+for the README.
+
 Most presentations are stolen somewhere from the internet and "converted" to taka.
 Attribution and sources are provided within the examples.

@@ -1,168 +1,126 @@
-> this project is work in progress. nothing to see yet.
+<div align="center">
 
-# Create presentation slides quickly
+# taka
 
-`taka` is an application, that converts a text file with special markup into a presentation.
-It is inspired by the [takahashi method], a presentation style that uses a large number of slides containing few word (often only one word).
-These words are scaled to the size of the slide, making them the sole focus.
+### Big text. Few words. Fast slides.
 
-While `taka` allows more than a few words per slide, the guiding principle is the same.
-- a presentations main focus is the speaker, slides are auxiliary
-- slides help guiding a presentation and provide context (where are we relative to the start and end of the presentation?)
-- a single slide should be understandable in seconds by humans, a to not distract too long from the speaker
+A presentation tool in the spirit of the [takahashi method]: one idea per
+slide, scaled to fill the screen. The speaker is the show — the slides just
+keep time.
 
-## Things you can put into slides
+![taka presenting itself](docs/demo.gif)
 
-- words
-- an image
-- the output of some program (which can be words or an image)
+<sub>The deck above is [`examples/demo/demo.taka`](examples/demo/demo.taka) — taka, presenting taka.</sub>
 
-## How taka will show your slides
+</div>
 
-When it comes time to present for you, there are multiple ways you can use `taka` to show your slides.
+---
 
-- launch full screen window (X11, Wayland, mac, windows)
-- launch text-based application in terminal emulator (some VT100 descendant or conhost)
-- create a PDF file
-- create a HTML file
+## The idea
 
-## How to write slides
+Cram a paragraph onto a slide and the room reads instead of listening. The
+takahashi method does the opposite: **many slides, a few huge words each**.
+Every slide lands in a second, so attention stays on you.
 
-You can write your slides in a text file, that follows some special markup rules.
+- The presentation's focus is the **speaker**; slides are auxiliary.
+- Slides keep the audience oriented — where are we, start to end?
+- A slide should be understood in **seconds**, then get out of the way.
 
-- every paragraph (text blocks delimited by empty lines) will become a slide
-- contents of a slide (words and/or images) will be scaled to take up the maximum amount of available space, while preserving aspect ratio and keeping some padding distance to the edges
-- the encoding of the file must be UTF-8
+## Write a slide, get a deck
 
-### Special markup for words
+A `.taka` file is plain UTF-8 text. **Blank lines separate slides.** That is
+the entire structure.
 
-- mono space: \`example\` -> `example`
-- bold: \*example\* -> __example__
-- italic: \/example\/ -> _example_
-- underline: \_example\_ -> <u>example</u>
-- strike through: \-example\- -> ~~example~~
-- reverse: \|example\| -> <span style="color:Background; background-color:WindowText">example</span>
+```taka
+Simple
 
-### Comments
+Made
 
-Any line starting with `#` is a comment line.
-Comments are __not ignored__.
-But they are invisible in the final rendered slide.
-Comments are always mapped to the following slide.
-Depending on the output format, they get turned into notes, presentor mode or are simply discarded.
-
-### Importing images into a slide
-
-Reference an image on disk by using the `@image(<path>)` function.
-The `path` to the image can be either a path relative to slides file or an absolute path.
-A single slide can hold an arbitrary number of images.
-Images will always be scaled so that their size is maximized (respecting aspect ratio).
-Multiple images are arranged in a equally weighted grid from top left to bottom right.
-
-Images are rendered in the background layer of the slide, so that laying out images and text can happen separately.
-This results in text always being rendered on top of images if both are present on a single slide.
-
-### Shelling out to produce a slide
-
-Assume that a slide should show the output of some command.
-Many people are comfortable with shell scripts, so here is an example of using some POSIX shell:
-
-```
-Welcome To This Presentation
-
-Demonstrating the \`system\` function
-
-number of words on all slides: @system(sh -c wl -c)
+Easy
 ```
 
-The `@system(...)` part will be replaced by the output of running `sh -c wc -c` and piping the contents of the slides file into standard input.
-The `system` function can run any program, that is accessible via the `PATH` environment variable.
-So the above example could have been written as `@system(wl -c)` if `wl` is program in your `PATH`.
+Three words → three slides, each scaled to fill the frame.
 
-A common use case for shelling out is to construct a pipeline of commands.
-If all you need is a pure pipeline (no control flow or string manipulation) then the `pipe` function can be used.
-It works similarly to the `system` function, but takes a list of programs that will be composed into a pipeline.
+## Everything you can put on a slide
 
-```
-number of unique words: @pipe(tr -c a-zA-Z | sed '/^$/d' | sort | uniq -i -c)
-```
+**Inline styles** — `*bold*`, `/italic/`, `` `mono` ``, `_underline_`,
+`-strike-`, `|reverse|`. A backslash escapes a marker (`\*` → `*`). Stray
+`/` and `-` in URLs or hyphenated words stay literal.
 
-Programs are separated by `|` so that it looks very similar to a shell script.
-The pipeline however is constructed by taka.
-These features are intended to make taka slightly more portable across *Unix* and *Windows* systems.
+**Media** — scaled to fill, laid out behind the text:
 
-## Functions
-
-### `@image(<path>)`
-
-Lists the functions built-in to taka and their documentation.
-The general syntax for functions is: `@function_name(parameter_list)`.
-Parameters are delimited by whitespace or the special character `|`.
-Use `''` to group parameters, for example to include whitespace into a parameter.
-Escape the `'` character with `\\` to `\\'` if you want to literally specify `'` as a parameter.
-The same applies to `|`.
-
-Looks for an image file at `path` and includes it into the background layer of the current slide.
-`path` can be absolute or relative to the current file.
-Supported image formats are JPEG, PNG and GIF.
-Images are scaled to take up the maximum amount of slide space, while still respecting the aspect ratio of the image.
-If multiple images are shown on one slide, they are arranged in a equally weighted grid, from top left to bottom right.
-*Equally weighted* means, that all images will have roughly the same size.
-*Roughly*, because, unless all images have the same aspect ratio, it is unlikely that the resulting sizes will be equal.
-
-### `@system(<program> <arguments...>)`
-
-Looks for `program` in the `PATH` environment variable and invokes it with `arguments...`.
-Arguments are separated by whitespace and grouped with `'...'`.
-Assuming you want to invoke the program `echo` with arguments `a`, `b` and `c`.
-The difference between `@system(echo a b c)` and `@system(echo 'a b c')` is that the first invokes the program `echo` with _three_ arguments (`a`, `b` and `c`) while the second invokes `echo` with _one_ argument (`a b c`).
-
-> A program `echo` usually does not exist but is a shell builtin function.
-
-The contents of the current file is piped into the standard input of the invoked command.
-The standard output of the command will be used to replace the `@system(...)` symbols before rendering output.
-All `system` functions are given the file contents before any system function was run.
-That means, the order of slides and the outputs of `system` functions do not potentially disturb each other.
-
-Some programs do not work well with standard input but want to take in paths as arguments.
-In those cases use the special `%` placeholder in the argument list.
-This special symbol will expand to the current file path (absolute).
-Its presence will also prevent the piping of the file contents to standard input.
-If the path to the current file is hard coded into the argument list, the effect will be the invoked program will receive the file contents via standard input and via path.
-
-```
-INCEPTION
-
-deeper @system(cat %)
+```taka
+@image(diagram.png)                 one image, scaled to fill
+@image(a.png) @image(b.png)         many images → an equal grid
+@video(clip.mp4)                    video in the background
+@audio(applause.mp3)                sound on entry
 ```
 
-The output of the invoked program is expected to be text (UTF-8) or one of the supported image file formats.
+**Live command output** with `@run` — taka builds the pipeline itself, so
+there's **no shell** and it behaves the same everywhere. `%` expands to the
+deck's path:
 
-Example:
-
-```
-Todays weather in Berlin
-@system(curl wttr.in/Berlin?qpt0)
-
-This time as an image
-@system(curl wttr.in/Berlin_qpt0.png)
+```taka
+this deck is
+@run(/usr/bin/wc -l % | /usr/bin/tr -cd 0-9)
+lines
 ```
 
-### `@pipe(<program> <arguments...> | <program> <arguments...> | ...)`
+**Speaker notes** — any line starting with `#` is a note: invisible on the
+slide, carried into the following slide's notes.
 
-Looks for `programs` in the `PATH` variable and constructs a pipeline out of the given programs separated by `|`.
-The output of the previous command becomes the input of the current command.
-From left to right until the number of programs is exhausted.
-The resulting output will be used to replace the `@pipe(...)` call in the final rendering of the slides.
-Same rules for output, quoting and grouping as for `system` apply.
+Real fonts, shaped with FreeType + HarfBuzz — so **CJK just works**:
 
-Example:
-
-This example assumes there is a `source.png` file that will be combined with some weather info.
-
+```taka
+高橋メソッド
 ```
-Who needs Photoshop?
-@pipe(curl wttr.in/Berlin_qpt0.png | magick convert source.png - -geometry +50+50 -composite -)
 
-when you can have cryptic commands!
+The full, normative definition lives in [`SPEC.md`](SPEC.md).
+
+## Four ways to show it
+
+One deck, four renderers:
+
+```sh
+zig build run -- examples/demo/demo.taka                      # full-screen window
+zig build run -- examples/demo/demo.taka --to terminal        # in your terminal
+zig build run -- examples/demo/demo.taka --to html -o deck.html
+zig build run -- examples/demo/demo.taka --to pdf  -o deck.pdf
 ```
+
+In the interactive forms: **→ / Space** advance, **←** back, **Home / End**
+jump, **Esc** quits.
+
+## Quick start
+
+taka is built with [Zig 0.16](https://ziglang.org). The window form links a
+few ubiquitous system libraries (OpenGL/X11, FreeType, HarfBuzz, FFmpeg); the
+rest is vendored. **No Zig package dependencies — the build fetches nothing.**
+
+```sh
+zig build            # build the app
+zig build run -- <deck>.taka   # present it
+zig build test       # unit + integration tests (offline, headless)
+zig build check      # formatting gate
+```
+
+## Under the hood
+
+- **Window** — [sokol](https://github.com/floooh/sokol) (vendored) for the
+  window and immediate-mode rendering; FreeType + HarfBuzz for text, stb_image
+  for pictures, miniaudio for sound, FFmpeg for video.
+- **Terminal / HTML / PDF** — pure Zig; the HTML is self-contained (images
+  embedded), the PDF is written by hand.
+- Why vendored + system libraries instead of packages?
+  [`docs/window-backend.md`](docs/window-backend.md).
+
+## More
+
+- [`SPEC.md`](SPEC.md) — the format, the CLI, the output forms
+- [`examples/`](examples/) — real decks (incl. the Japanese original and the demo)
+- [`docs/TESTING.md`](docs/TESTING.md) — how taka is tested
+- [`CLAUDE.md`](CLAUDE.md) — coding rules
+
+<div align="center"><sub><b>文字は 大きく — 人に やさしく.</b> Big letters; be kind to people.</sub></div>
+
+[takahashi method]: http://www.rubycolor.org/takahashi/

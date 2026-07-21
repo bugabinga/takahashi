@@ -1,0 +1,53 @@
+# taka presenting itself. Lines starting with '#' are speaker notes:
+# invisible on the slide, carried into notes/presenter view.
+taka
+
+# The takahashi method: one idea per slide, scaled huge.
+big text
+
+few words
+
+# All six inline styles.
+*bold* /italic/ `mono`
+_underline_ -strike- |reverse|
+
+# A backslash escapes a marker so it renders literally.
+\*not bold\*
+
+# @run splices live output. No shell — taka builds the pipeline itself.
+# '%' expands to this file's path, so wc counts the deck's own lines.
+this deck is
+@run(/usr/bin/wc -l % | /usr/bin/tr -cd 0-9)
+lines
+
+# A real, shell-free pipeline.
+@run(/usr/bin/seq 1 7 | /usr/bin/paste -sd' ')
+
+# One image, scaled to fill the frame.
+@image(tiles/a.png)
+
+# Many images become an equal grid, top-left to bottom-right.
+@image(tiles/a.png) @image(tiles/b.png) @image(tiles/c.png) @image(tiles/d.png)
+
+# Video plays in the background layer.
+@video(motion.mp4)
+
+# Audio fires on entry.
+@audio(chime.wav)
+listen
+
+# Real fonts: CJK shaped by HarfBuzz, not just ASCII.
+高橋メソッド
+
+人に
+やさしく
+
+# One deck, four ways to show it.
+window
+terminal
+pdf
+html
+
+# Curtain.
+文字は
+大きく
