@@ -81,6 +81,9 @@ fn tokenize(arena: Allocator, inner: []const u8) Allocator.Error![]const Token {
     var tokens: std.ArrayList(Token) = .empty;
     var current: std.ArrayList(u8) = .empty;
     var has_token = false;
+    // Whether the current token was formed with a backslash escape. An escaped
+    // `\%` must stay a literal argument, not the `%` placeholder (SPEC 1.3).
+    var has_escape = false;
     var quoted = false;
 
     var i: usize = 0;
@@ -89,6 +92,7 @@ fn tokenize(arena: Allocator, inner: []const u8) Allocator.Error![]const Token {
         if (c == '\\' and i + 1 < inner.len) {
             try current.append(arena, inner[i + 1]);
             has_token = true;
+            has_escape = true;
             i += 1;
             continue;
         }
@@ -102,18 +106,18 @@ fn tokenize(arena: Allocator, inner: []const u8) Allocator.Error![]const Token {
             continue;
         }
         if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
-            try endToken(arena, &tokens, &current, &has_token);
+            try endToken(arena, &tokens, &current, &has_token, &has_escape);
             continue;
         }
         if (c == '|') {
-            try endToken(arena, &tokens, &current, &has_token);
+            try endToken(arena, &tokens, &current, &has_token, &has_escape);
             try tokens.append(arena, .{ .text = "|", .kind = .pipe });
             continue;
         }
         try current.append(arena, c);
         has_token = true;
     }
-    try endToken(arena, &tokens, &current, &has_token);
+    try endToken(arena, &tokens, &current, &has_token, &has_escape);
     return tokens.toOwnedSlice(arena);
 }
 
@@ -122,12 +126,15 @@ fn endToken(
     tokens: *std.ArrayList(Token),
     current: *std.ArrayList(u8),
     has_token: *bool,
+    has_escape: *bool,
 ) Allocator.Error!void {
     if (!has_token.*) return;
     const text = try current.toOwnedSlice(arena);
-    const kind: @FieldType(Token, "kind") = if (std.mem.eql(u8, text, "%")) .percent else .arg;
-    try tokens.append(arena, .{ .text = text, .kind = kind });
+    // A lone, unescaped `%` is the file-path placeholder; `\%` is literal.
+    const is_percent = !has_escape.* and std.mem.eql(u8, text, "%");
+    try tokens.append(arena, .{ .text = text, .kind = if (is_percent) .percent else .arg });
     has_token.* = false;
+    has_escape.* = false;
 }
 
 test "splits literal text from a call" {

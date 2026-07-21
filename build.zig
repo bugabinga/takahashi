@@ -76,8 +76,9 @@ pub fn build(b: *std.Build) void {
     // Formatting gate.
     const fmt = b.addFmt(.{
         .paths = &.{
-            "src",      "build.zig",      "build.zig.zon",
-            "test.zig", "media_test.zig", "integration_test.zig",
+            "src",                  "build.zig",      "build.zig.zon",
+            "test.zig",             "media_test.zig", "integration_test.zig",
+            "correctness_test.zig", "bench.zig",
         },
         .check = true,
     });

@@ -19,4 +19,5 @@ test {
     _ = @import("src/terminal.zig");
     _ = @import("src/pdf.zig");
     _ = @import("integration_test.zig");
+    _ = @import("correctness_test.zig");
 }
