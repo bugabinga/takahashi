@@ -42,7 +42,7 @@ pub fn main(init: std.process.Init) !void {
 
     switch (config.form) {
         .window => window.present(gpa, io, base_dir, deck_dir, doc.slides),
-        .terminal => try terminal.present(io, doc.slides),
+        .terminal => try terminal.present(io, doc.slides, detectGraphics(init.environ_map)),
         .html => {
             const out = try html.render(gpa, doc.slides);
             defer gpa.free(out);
@@ -56,6 +56,17 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // TODO: watch mode (SPEC 2.2) — when config.watch, re-render on file change.
+}
+
+/// Detect the terminal's inline-graphics support for the terminal form
+/// (SPEC 3.2). kitty sets `KITTY_WINDOW_ID`; kitty and compatible emulators
+/// (ghostty, …) put "kitty" in `$TERM`. Anything else gets the text fallback.
+fn detectGraphics(env: *std.process.Environ.Map) terminal.Graphics {
+    if (env.contains("KITTY_WINDOW_ID")) return .kitty;
+    if (env.get("TERM")) |term| {
+        if (std.mem.indexOf(u8, term, "kitty") != null) return .kitty;
+    }
+    return .none;
 }
 
 /// Write a file form's bytes to `out_path`, or to standard output when null.

@@ -149,8 +149,9 @@ A full-screen graphical window (X11, Wayland, macOS, Windows). Interactive
 ### 3.2 Terminal
 
 A text-based application in a terminal emulator. Interactive (§2.1). Text
-markup and layout degrade gracefully to what the terminal supports. Notes
-are shown via the presenter affordance.
+markup and layout degrade gracefully to what the terminal supports: images
+are drawn inline where the terminal implements a graphics protocol, and
+noted textually otherwise. Notes are shown via the presenter affordance.
 
 ### 3.3 PDF
 
