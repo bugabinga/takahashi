@@ -1,7 +1,7 @@
 //! Turn parsed slides (parser.zig) into rendered slides ready for an output
-//! form: `@run` output substituted, media collected, and the remaining text
-//! parsed into styled spans (SPEC 1). Images are embedded as data URIs so the
-//! HTML form stays self-contained.
+//! form: `@run` output substituted, media collected, `@note` prose pulled out
+//! as speaker notes, and the remaining text parsed into styled spans (SPEC 1).
+//! Images are embedded as data URIs so the HTML form stays self-contained.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -71,6 +71,7 @@ fn processSlide(
 
     var text: std.ArrayList(u8) = .empty;
     var media: std.ArrayList(Media) = .empty;
+    var notes: std.ArrayList(u8) = .empty;
     for (segments) |segment| switch (segment) {
         .text => |t| try text.appendSlice(arena, t),
         .call => |call| switch (call.func) {
@@ -83,14 +84,28 @@ fn processSlide(
             },
             .image => try media.append(arena, try embed(arena, io, base_dir, .image, pathOf(call))),
             .audio => try media.append(arena, .{ .kind = .audio, .path = pathOf(call) }),
+            .note => try appendNote(arena, &notes, call),
         },
     };
 
+    // Pulling out `@note`/`@image` calls can leave leading or trailing blank
+    // lines; slides never carry meaningful edge whitespace, so trim it.
+    const visible = std.mem.trim(u8, text.items, " \t\r\n");
     return .{
-        .spans = try markup.parse(arena, text.items),
+        .spans = try markup.parse(arena, visible),
         .media = try media.toOwnedSlice(arena),
-        .notes = raw.notes,
+        .notes = try notes.toOwnedSlice(arena),
     };
+}
+
+/// Append a `@note` body to the slide's notes (SPEC 1.3), blank line between
+/// multiple notes. Empty `@note()` calls contribute nothing.
+fn appendNote(arena: Allocator, notes: *std.ArrayList(u8), call: function.Call) Allocator.Error!void {
+    if (call.tokens.len == 0) return;
+    const note = call.tokens[0].text;
+    if (note.len == 0) return;
+    if (notes.items.len != 0) try notes.appendSlice(arena, "\n\n");
+    try notes.appendSlice(arena, note);
 }
 
 fn pathOf(call: function.Call) []const u8 {
@@ -130,8 +145,8 @@ test "substitutes @run output and collects media, then parses markup" {
     defer threaded.deinit();
 
     const src =
-        "Title with @run(/usr/bin/echo hi) and *bold*\n@image(missing.png)";
-    const slides = [_]slide_mod.Slide{.{ .body = src, .notes = "" }};
+        "Title with @run(/usr/bin/echo hi) and *bold*\n@image(missing.png)@note(speak up)";
+    const slides = [_]slide_mod.Slide{.{ .body = src }};
     var doc = try process(gpa, threaded.io(), std.Io.Dir.cwd(), src, "/tmp/x.taka", .{ .slides = &slides });
     defer doc.deinit();
 
@@ -143,6 +158,9 @@ test "substitutes @run output and collects media, then parses markup" {
     for (slide.spans) |s| try joined.appendSlice(gpa, s.text);
     try std.testing.expect(std.mem.indexOf(u8, joined.items, "hi") != null);
     try std.testing.expect(std.mem.indexOf(u8, joined.items, "bold") != null);
+    // @note is pulled out as speaker notes, not left in the visible text.
+    try std.testing.expectEqualStrings("speak up", slide.notes);
+    try std.testing.expect(std.mem.indexOf(u8, joined.items, "speak up") == null);
     // one image collected (missing file -> path kept, no data uri)
     try std.testing.expectEqual(@as(usize, 1), slide.media.len);
     try std.testing.expectEqual(MediaKind.image, slide.media[0].kind);

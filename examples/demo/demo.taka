@@ -1,8 +1,10 @@
-# taka presenting itself. Lines starting with '#' are speaker notes:
-# invisible on the slide, carried into notes/presenter view.
+# taka presenting itself. Lines starting with '#' are private authoring
+# comments: dropped entirely, never shown on a slide or to the speaker.
+@note(Welcome. Breathe. This whole talk is one plain-text file.)
 taka
 
 # The takahashi method: one idea per slide, scaled huge.
+@note(One idea per slide. Everything else you say out loud.)
 big text
 
 few words
@@ -33,7 +35,9 @@ lines
 @audio(chime.wav)
 listen
 
-# Real fonts: CJK shaped by HarfBuzz, not just ASCII.
+# @note is speaker-only prose, synced to the slide in the presenter view.
+@note(Japanese for "Takahashi method". HarfBuzz shapes the glyphs;
+say it out loud: taka-hashi.)
 高橋メソッド
 
 人に

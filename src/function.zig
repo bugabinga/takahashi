@@ -3,12 +3,14 @@
 //! `scan` splits text into literal and call segments. Arguments follow the
 //! shared rules: whitespace separates them, `'single quotes'` group, `\`
 //! escapes a special character. For `@run`, `|` separates pipeline stages and
-//! a lone `%` is the current-file placeholder.
+//! a lone `%` is the current-file placeholder. `@note` is the exception: its
+//! content is captured verbatim as prose, not split into an argument vector.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
-pub const Function = enum { image, audio, run };
+pub const Function = enum { image, audio, note, run };
 
 pub const Token = struct {
     text: []const u8,
@@ -73,8 +75,31 @@ fn parseCall(arena: Allocator, text: []const u8, at: usize) Allocator.Error!?Par
     }
     if (i >= text.len) return null; // no closing ')'
 
-    const tokens = try tokenize(arena, text[inner_start..i]);
+    const inner = text[inner_start..i];
+    // `@note` is prose for the speaker, not an argument vector: capture it
+    // whole rather than tokenizing it (SPEC 1.3).
+    const tokens = if (func == .note)
+        try noteTokens(arena, inner)
+    else
+        try tokenize(arena, inner);
     return .{ .call = .{ .func = func, .tokens = tokens }, .end = i + 1 };
+}
+
+/// Capture a `@note` body verbatim as a single token: whitespace and newlines
+/// are preserved, and `\` escapes the following byte so a literal `)` can be
+/// written `\)` without closing the call.
+fn noteTokens(arena: Allocator, inner: []const u8) Allocator.Error![]const Token {
+    var buffer: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < inner.len) : (i += 1) {
+        if (inner[i] == '\\' and i + 1 < inner.len) i += 1;
+        try buffer.append(arena, inner[i]);
+    }
+    const tokens = try arena.alloc(Token, 1);
+    tokens[0] = .{ .text = try buffer.toOwnedSlice(arena), .kind = .arg };
+    assert(tokens.len == 1);
+    assert(tokens[0].kind == .arg);
+    return tokens;
 }
 
 fn tokenize(arena: Allocator, inner: []const u8) Allocator.Error![]const Token {
@@ -164,6 +189,20 @@ test "tokenizes quotes, pipes and the percent placeholder" {
     try std.testing.expectEqual(@as(@TypeOf(t[2].kind), .pipe), t[2].kind);
     try std.testing.expectEqualStrings("sort", t[3].text);
     try std.testing.expectEqual(@as(@TypeOf(t[4].kind), .percent), t[4].kind);
+}
+
+test "note captures its content verbatim, not as split arguments" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const segs = try scan(arena, "@note(breathe, then \\) smile)");
+    try std.testing.expectEqual(@as(usize, 1), segs.len);
+    try std.testing.expectEqual(Function.note, segs[0].call.func);
+    const t = segs[0].call.tokens;
+    // One token, whitespace preserved, `\)` unescaped to a literal `)`.
+    try std.testing.expectEqual(@as(usize, 1), t.len);
+    try std.testing.expectEqualStrings("breathe, then ) smile", t[0].text);
 }
 
 test "an unknown or unterminated call stays literal" {

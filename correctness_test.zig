@@ -166,7 +166,6 @@ fn exercise(input: []const u8) !void {
     defer deck.deinit(gpa);
     for (deck.slides) |s| {
         assertWithin(input, s.body);
-        assertWithin(input, s.notes);
     }
 }
 
@@ -249,7 +248,6 @@ test "parser: leading and trailing blank lines are trimmed" {
     defer deck.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), deck.slides.len);
     try std.testing.expectEqualStrings("X", deck.slides[0].body);
-    try std.testing.expectEqualStrings("", deck.slides[0].notes);
 }
 
 test "parser: no trailing newline still emits the final slide" {
@@ -270,47 +268,42 @@ test "parser: CRLF line endings are retained verbatim in the body" {
     try std.testing.expectEqualStrings("c\r", deck.slides[1].body);
 }
 
-test "parser: comments attach to the following slide" {
+test "parser: a comment before content is dropped, not rendered" {
     const gpa = std.testing.allocator;
     var deck = try parser.parse(gpa, "# a\n# b\nBody line\n");
     defer deck.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), deck.slides.len);
     try std.testing.expectEqualStrings("Body line", deck.slides[0].body);
-    try std.testing.expectEqualStrings("# a\n# b", deck.slides[0].notes);
 }
 
-test "parser: a comment between slides binds forward, not backward" {
+test "parser: a comment ends a paragraph and belongs to no slide" {
     const gpa = std.testing.allocator;
     var deck = try parser.parse(gpa, "A\n\n# n\nB");
     defer deck.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 2), deck.slides.len);
     try std.testing.expectEqualStrings("A", deck.slides[0].body);
-    try std.testing.expectEqualStrings("", deck.slides[0].notes);
     try std.testing.expectEqualStrings("B", deck.slides[1].body);
-    try std.testing.expectEqualStrings("# n", deck.slides[1].notes);
 }
 
 test "parser: trailing comment with no following slide is dropped" {
     const gpa = std.testing.allocator;
-    var deck = try parser.parse(gpa, "A\n\n# orphan note\n");
+    var deck = try parser.parse(gpa, "A\n\n# orphan comment\n");
     defer deck.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), deck.slides.len);
     try std.testing.expectEqualStrings("A", deck.slides[0].body);
-    try std.testing.expectEqualStrings("", deck.slides[0].notes);
 }
 
 test "parser: multiple paragraphs across many blank lines" {
     try expectSlides("one\n\n\n\ntwo\n\nthree\n", 3);
 }
 
-test "parser: body and notes are sub-slices of the source" {
+test "parser: bodies are sub-slices of the source" {
     const gpa = std.testing.allocator;
-    const source = "# note one\n# note two\nTitle\nSubtitle\n\nSecond\n";
+    const source = "# a comment\nTitle\nSubtitle\n\nSecond\n";
     var deck = try parser.parse(gpa, source);
     defer deck.deinit(gpa);
     for (deck.slides) |s| {
         assertWithin(source, s.body);
-        assertWithin(source, s.notes);
     }
 }
 

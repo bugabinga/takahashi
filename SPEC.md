@@ -23,8 +23,9 @@ A `.taka` file is UTF-8 text. It is a sequence of **slides**.
 ### 1.1 Comments
 
 - A line whose first character is `#` is a comment.
-- Comments are not rendered. Each comment attaches to the slide that
-  follows it and carries into that slide's speaker notes.
+- Comments are not rendered and belong to no slide — use them for private
+  authoring notes to yourself. Speaker notes shown during a talk are a
+  separate thing, written with `@note` (§1.3).
 
 ### 1.2 Text markup
 
@@ -63,6 +64,12 @@ Defined functions:
   file, or absolute) to the slide. Common formats: WAV, MP3, OGG. It plays
   when the slide is shown, in forms that can play sound (window, HTML).
   Forms that cannot play audio omit it.
+- **`@note(text)`** — records `text` as the current slide's speaker notes.
+  Unlike other functions its content is taken verbatim — whitespace and
+  newlines are preserved, and only `\` is special (it escapes the following
+  character, so a literal `)` is written `\)`). Notes are never shown to the
+  audience; they reach the speaker only through a form's presenter affordance
+  (§2.1, §3). Multiple `@note` calls on one slide are joined in order.
 - **`@run(command | command | …)`** — runs a command line and substitutes
   its standard output. A command is a program (resolved via `PATH`)
   followed by arguments. Commands are joined into a pipeline with `|`, each

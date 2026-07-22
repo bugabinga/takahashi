@@ -65,8 +65,9 @@ this deck is
 lines
 ```
 
-**Speaker notes** — any line starting with `#` is a note: invisible on the
-slide, carried into the following slide's notes.
+**Speaker notes** — `@note(...)` records prose for the presenter view:
+invisible to the audience, synced to the slide it sits on. A line starting
+with `#` is just a private authoring comment, dropped entirely.
 
 Real fonts, shaped with FreeType + HarfBuzz — so **CJK just works**:
 
