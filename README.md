@@ -89,7 +89,8 @@ zig build run -- examples/demo/demo.taka --to pdf  -o deck.pdf
 ```
 
 In the interactive forms: **→ / Space** advance, **←** back, **Home / End**
-jump, **Esc** quits.
+jump, **Esc** quits. In the browser, **p** opens a synced presenter window
+with the current slide's speaker notes.
 
 ## Quick start
 

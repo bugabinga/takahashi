@@ -1,6 +1,13 @@
 //! HTML output form (SPEC 3.4): render a document to a single self-contained
 //! HTML file — inline CSS, minimal vanilla JS for navigation, images embedded
 //! as data URIs. Returns an owned buffer; the caller writes it out.
+//!
+//! Speaker notes (SPEC 2.1) live in a hidden `.notes` div per slide, invisible
+//! to the audience. Pressing `p` opens a presenter window (a second browser
+//! window) that reads those notes and stays synced to the deck; it uses a
+//! direct window reference rather than BroadcastChannel so it also works when
+//! the file is opened over `file://` (an opaque origin, where channels do not
+//! connect).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -32,15 +39,56 @@ const head =
 const tail =
     \\<script>
     \\  const slides=[...document.querySelectorAll('section')];
-    \\  let i=0;
-    \\  const show=n=>{slides[i].classList.remove('active');
-    \\    i=Math.max(0,Math.min(slides.length-1,n));
-    \\    slides[i].classList.add('active')};
-    \\  addEventListener('keydown',e=>{
+    \\  let i=0, pres=null;
+    \\  const notesOf=n=>{const d=slides[n].querySelector('.notes');
+    \\    return d?d.textContent:''};
+    \\  const textOf=n=>{const s=slides[n].cloneNode(true);
+    \\    const d=s.querySelector('.notes'); if(d)d.remove();
+    \\    return s.textContent.trim()||'(media slide)'};
+    \\  const nav=e=>{
     \\    if(e.key==='ArrowRight'||e.key===' ')show(i+1);
     \\    else if(e.key==='ArrowLeft')show(i-1);
     \\    else if(e.key==='Home')show(0);
-    \\    else if(e.key==='End')show(slides.length-1)});
+    \\    else if(e.key==='End')show(slides.length-1);
+    \\    else if(e.key==='p'||e.key==='P')togglePresenter()};
+    \\  const show=n=>{slides[i].classList.remove('active');
+    \\    i=Math.max(0,Math.min(slides.length-1,n));
+    \\    slides[i].classList.add('active');
+    \\    renderPresenter()};
+    \\  function togglePresenter(){
+    \\    if(pres&&!pres.closed){pres.focus();return}
+    \\    pres=window.open('','taka-presenter','width=820,height=620');
+    \\    if(!pres)return;
+    \\    pres.document.write('<!doctype html><meta charset=utf-8>'
+    \\      +'<title>taka · presenter</title><style>'
+    \\      +'html,body{margin:0;height:100%;background:#111;color:#eee;'
+    \\      +'font-family:system-ui,sans-serif}'
+    \\      +'body{display:flex;flex-direction:column;gap:1rem;padding:2rem;'
+    \\      +'box-sizing:border-box}'
+    \\      +'#pos{font-size:.9rem;color:#888;letter-spacing:.1em;'
+    \\      +'text-transform:uppercase}'
+    \\      +'#cur{font-size:1.1rem;color:#9ab}'
+    \\      +'#notes{flex:1;font-size:2rem;line-height:1.45;white-space:pre-wrap;'
+    \\      +'overflow:auto}'
+    \\      +'#next{font-size:1rem;color:#778;border-top:1px solid #333;'
+    \\      +'padding-top:1rem}</style><body>'
+    \\      +'<div id=pos></div><div id=cur></div><div id=notes></div>'
+    \\      +'<div id=next></div>');
+    \\    pres.document.close();
+    \\    pres.document.addEventListener('keydown',nav);
+    \\    renderPresenter();
+    \\  }
+    \\  function renderPresenter(){
+    \\    if(!pres||pres.closed)return;
+    \\    const d=pres.document;
+    \\    d.getElementById('pos').textContent='Slide '+(i+1)+' / '+slides.length;
+    \\    d.getElementById('cur').textContent=textOf(i);
+    \\    d.getElementById('notes').textContent=notesOf(i)||'(no notes)';
+    \\    d.getElementById('next').textContent=i+1<slides.length
+    \\      ?'Next → '+textOf(i+1):'— end —';
+    \\  }
+    \\  addEventListener('keydown',nav);
+    \\  addEventListener('beforeunload',()=>{if(pres&&!pres.closed)pres.close()});
     \\  if(slides.length)show(0);
     \\</script></body></html>
     \\
@@ -124,6 +172,10 @@ test "renders styled spans, media and one section per slide" {
     try std.testing.expect(std.mem.indexOf(u8, doc, "<b>bold</b>") != null);
     try std.testing.expect(std.mem.indexOf(u8, doc, "src=\"data:image/png;base64,AAA\"") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, doc, "<section>"));
+    // Notes are present but hidden, and a presenter window can surface them.
+    try std.testing.expect(std.mem.indexOf(u8, doc, "<div class=\"notes\">hi</div>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, doc, ".notes{display:none}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, doc, "taka-presenter") != null);
 }
 
 test {

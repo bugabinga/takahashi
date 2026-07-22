@@ -159,5 +159,6 @@ the format allows, and are otherwise discarded.
 
 ### 3.4 HTML
 
-A single HTML file. Slides are navigable in a browser. Notes become
-presenter/speaker notes where supported, and are otherwise discarded.
+A single HTML file. Slides are navigable in a browser. The current slide's
+notes are surfaced through a presenter window the speaker opens on demand —
+a second browser window, synced to the deck, that the audience never sees.
