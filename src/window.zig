@@ -1,7 +1,7 @@
 //! Window output form (SPEC 3.1): a full-screen presentation via the vendored
 //! sokol libraries. Text is rendered with FreeType + HarfBuzz (proportional,
 //! scaled to fill the frame, CJK-aware), images are laid out in an equal grid
-//! behind the text, video plays in the background, and audio plays on entry.
+//! behind the text, and audio plays on entry.
 
 const std = @import("std");
 const sk = @import("sokol");
@@ -11,7 +11,6 @@ const Presentation = @import("presentation.zig").Presentation;
 const text = @import("text.zig");
 const image = @import("image.zig");
 const audio = @import("audio.zig");
-const video = @import("video.zig");
 
 const log = std.log.scoped(.takahashi);
 const padding_px: f32 = 48;
@@ -36,8 +35,6 @@ const State = struct {
     text_tex: ?Texture = null,
     text_vertices: []const text.Vertex = &.{},
     images: []ImageDraw = &.{},
-    decoder: ?video.Decoder = null,
-    video_tex: ?Texture = null,
 };
 
 const Texture = struct {
@@ -118,7 +115,6 @@ fn frame() callconv(.c) void {
     if (state.prepared != state.show.current or state.prepared_w != w or state.prepared_h != h) {
         prepareSlide(w, h);
     }
-    advanceVideo();
 
     sk.sgl_defaults();
     sk.sgl_load_pipeline(state.pipeline);
@@ -127,12 +123,9 @@ fn frame() callconv(.c) void {
     sk.sgl_ortho(0, @floatFromInt(w), @floatFromInt(h), 0, -1, 1);
     sk.sgl_enable_texture();
 
-    // Background layer: images (SPEC 1.3) then video, text on top (SPEC 3).
+    // Background layer: images (SPEC 1.3), text on top (SPEC 3).
     for (state.images) |img| {
         drawRect(img.tex.view, img.x0, img.y0, img.x1, img.y1);
-    }
-    if (state.video_tex) |tex| {
-        drawRect(tex.view, 0, 0, @floatFromInt(w), @floatFromInt(h));
     }
     if (state.text_tex) |tex| drawGlyphs(tex.view, state.text_vertices);
 
@@ -166,16 +159,12 @@ fn cleanup() callconv(.c) void {
     sk.sg_shutdown();
 }
 
-/// Free the GPU resources and decoder held for the previous slide.
+/// Free the GPU resources held for the previous slide.
 fn releaseSlide() void {
     if (state.text_tex) |tex| tex.destroy();
     state.text_tex = null;
     for (state.images) |img| img.tex.destroy();
     state.images = &.{};
-    if (state.video_tex) |tex| tex.destroy();
-    state.video_tex = null;
-    if (state.decoder) |*dec| video.deinit(dec, state.gpa);
-    state.decoder = null;
 }
 
 fn prepareSlide(w: i32, h: i32) void {
@@ -255,30 +244,9 @@ fn startMedia(arena: std.mem.Allocator, slide: document.Slide) void {
         const full = std.fs.path.joinZ(arena, &.{ state.deck_dir, m.path }) catch continue;
         switch (m.kind) {
             .audio => state.player.play(full),
-            .video => {
-                if (state.decoder != null) continue;
-                state.decoder = video.open(state.gpa, full) catch |err| {
-                    log.warn("video {s} failed: {t}", .{ m.path, err });
-                    continue;
-                };
-            },
             .image => {},
         }
     }
-}
-
-fn advanceVideo() void {
-    const dec = &(state.decoder orelse return);
-    const frame_data = video.next(dec, state.gpa) catch return;
-    const f = frame_data orelse {
-        // Loop the clip.
-        video.deinit(dec, state.gpa);
-        state.decoder = null;
-        return;
-    };
-    defer state.gpa.free(f.pixels);
-    if (state.video_tex) |tex| tex.destroy();
-    state.video_tex = uploadTexture(f.pixels, f.w, f.h);
 }
 
 fn drawRect(view: sk.sg_view, x0: f32, y0: f32, x1: f32, y1: f32) void {

@@ -63,11 +63,6 @@ Defined functions:
   file, or absolute) to the slide. Common formats: WAV, MP3, OGG. It plays
   when the slide is shown, in forms that can play sound (window, HTML).
   Forms that cannot play audio omit it.
-- **`@video(path)`** — attaches the video file at `path`. Common formats:
-  MP4, WebM. Like an image it occupies the slide's background layer, and
-  plays when the slide is shown, in forms that can play video (window,
-  HTML). Static forms (PDF) show its first frame, or omit it where that is
-  not possible.
 - **`@run(command | command | …)`** — runs a command line and substitutes
   its standard output. A command is a program (resolved via `PATH`)
   followed by arguments. Commands are joined into a pipeline with `|`, each

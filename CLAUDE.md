@@ -20,9 +20,9 @@ Rules for working in this repository.
 - Prefer the standard library and language features over bespoke
   reimplementations or third-party dependencies.
 - Reach outside `std` only for capabilities it genuinely lacks — the vendored
-  sokol libraries for the window form, and system FreeType/HarfBuzz/FFmpeg for
-  text and media (SPEC 3.1). Prefer vendored single-header C or system
-  libraries over Zig package dependencies (see `docs/window-backend.md`).
+  sokol libraries for the window form, and system FreeType/HarfBuzz for text
+  (SPEC 3.1). Prefer vendored single-header C or system libraries over Zig
+  package dependencies (see `docs/window-backend.md`).
   Anything `std` already provides (I/O, containers, hashing, formatting,
   allocators, argument iteration, process spawning) must go through `std`.
 

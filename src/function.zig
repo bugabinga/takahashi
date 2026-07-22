@@ -8,7 +8,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub const Function = enum { image, audio, video, run };
+pub const Function = enum { image, audio, run };
 
 pub const Token = struct {
     text: []const u8,

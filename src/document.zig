@@ -14,7 +14,7 @@ const run = @import("run.zig").run;
 pub const Style = markup.Style;
 pub const Span = markup.Span;
 
-pub const MediaKind = enum { image, audio, video };
+pub const MediaKind = enum { image, audio };
 
 pub const Media = struct {
     kind: MediaKind,
@@ -83,7 +83,6 @@ fn processSlide(
             },
             .image => try media.append(arena, try embed(arena, io, base_dir, .image, pathOf(call))),
             .audio => try media.append(arena, .{ .kind = .audio, .path = pathOf(call) }),
-            .video => try media.append(arena, .{ .kind = .video, .path = pathOf(call) }),
         },
     };
 

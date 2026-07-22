@@ -29,10 +29,10 @@ pub fn build(b: *std.Build) void {
     exe_mod.linkSystemLibrary("Xi", .{});
     exe_mod.linkSystemLibrary("Xcursor", .{});
 
-    // Text (FreeType+HarfBuzz), images (stb_image), audio (miniaudio) and video
-    // (FFmpeg) for the window form. All vendored single-header or system libs;
-    // nothing is fetched. Kept off the test graph so `zig build test` stays
-    // offline and headless.
+    // Text (FreeType+HarfBuzz), images (stb_image) and audio (miniaudio) for the
+    // window form. All vendored single-header or system libs; nothing is
+    // fetched. Kept off the test graph so `zig build test` stays offline and
+    // headless.
     addMedia(b, exe_mod, target, optimize);
 
     b.installArtifact(exe);
@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit and integration tests");
     test_step.dependOn(&run_tests.step);
 
-    // Media module tests (text/image/audio/video). These link system libraries
+    // Media module tests (text/image/audio). These link system libraries
     // and read fixtures, so they are a separate step from the offline `test`.
     const media_test_mod = b.createModule(.{
         .root_source_file = b.path("media_test.zig"),
@@ -99,7 +99,7 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&fmt.step);
 }
 
-/// Wire the text/image/audio/video C dependencies into `mod`. See the module
+/// Wire the text/image/audio C dependencies into `mod`. See the module
 /// files and docs/window-backend.md for the rationale (vendored + system libs).
 fn addMedia(b: *std.Build, mod: *std.Build.Module, target: anytype, optimize: anytype) void {
     // text.zig: FreeType + HarfBuzz (system libraries).
@@ -138,19 +138,4 @@ fn addMedia(b: *std.Build, mod: *std.Build.Module, target: anytype, optimize: an
     mod.linkSystemLibrary("pthread", .{});
     mod.linkSystemLibrary("m", .{});
     mod.linkSystemLibrary("dl", .{});
-
-    // video.zig: FFmpeg (system libraries).
-    const video_c = b.addTranslateC(.{
-        .root_source_file = b.path("src/video_c.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    video_c.addIncludePath(.{ .cwd_relative = "/usr/include/x86_64-linux-gnu" });
-    video_c.addIncludePath(.{ .cwd_relative = "/usr/include" });
-    mod.addImport("video_c", video_c.createModule());
-    mod.addIncludePath(.{ .cwd_relative = "/usr/include/x86_64-linux-gnu" });
-    mod.linkSystemLibrary("avformat", .{});
-    mod.linkSystemLibrary("avcodec", .{});
-    mod.linkSystemLibrary("avutil", .{});
-    mod.linkSystemLibrary("swscale", .{});
 }

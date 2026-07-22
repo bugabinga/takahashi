@@ -21,7 +21,7 @@ const head =
     \\    place-content:center;text-align:center;white-space:pre-wrap;
     \\    font-size:8vmin;font-weight:700}
     \\  section.active{display:grid}
-    \\  img,video{max-width:100%;max-height:70vh;object-fit:contain}
+    \\  img{max-width:100%;max-height:70vh;object-fit:contain}
     \\  code{font-family:ui-monospace,monospace}
     \\  .rev{filter:invert(1)}
     \\  .notes{display:none}
@@ -95,11 +95,6 @@ fn writeMedia(gpa: Allocator, out: *std.ArrayList(u8), media: document.Media) Al
             try out.appendSlice(gpa, "<audio controls src=\"");
             try appendEscaped(gpa, out, src);
             try out.appendSlice(gpa, "\"></audio>");
-        },
-        .video => {
-            try out.appendSlice(gpa, "<video controls src=\"");
-            try appendEscaped(gpa, out, src);
-            try out.appendSlice(gpa, "\"></video>");
         },
     }
 }

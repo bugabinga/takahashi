@@ -29,9 +29,6 @@ lines
 # Many images become an equal grid, top-left to bottom-right.
 @image(tiles/a.png) @image(tiles/b.png) @image(tiles/c.png) @image(tiles/d.png)
 
-# Video plays in the background layer.
-@video(motion.mp4)
-
 # Audio fires on entry.
 @audio(chime.wav)
 listen

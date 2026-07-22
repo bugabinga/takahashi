@@ -204,7 +204,7 @@ const corpus = [_][]const u8{
     "@image('unterminated",
     "@image('a)b')",
     "@run(a\\|b \\% '\\'')",
-    "@audio(s.wav)@video(v.mp4)",
+    "@audio(s.wav)@image(v.png)",
     "@image('')",
     "mix *b* @image(p.png) /i/ text",
     "@@@((()))",
@@ -601,11 +601,11 @@ test "scan: an escaped percent is a literal argument, not the placeholder" {
 }
 
 test "scan: adjacent calls with no text between them" {
-    var r = try scanText("@audio(s.wav)@video(v.mp4)");
+    var r = try scanText("@audio(s.wav)@image(v.png)");
     defer r.deinit();
     try std.testing.expectEqual(@as(usize, 2), r.segs.len);
     try std.testing.expectEqual(Function.audio, r.segs[0].call.func);
-    try std.testing.expectEqual(Function.video, r.segs[1].call.func);
+    try std.testing.expectEqual(Function.image, r.segs[1].call.func);
 }
 
 test "scan: an escaped @image is not consumed as a call" {

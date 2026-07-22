@@ -52,7 +52,6 @@ Three words → three slides, each scaled to fill the frame.
 ```taka
 @image(diagram.png)                 one image, scaled to fill
 @image(a.png) @image(b.png)         many images → an equal grid
-@video(clip.mp4)                    video in the background
 @audio(applause.mp3)                sound on entry
 ```
 
@@ -94,7 +93,7 @@ jump, **Esc** quits.
 ## Quick start
 
 taka is built with [Zig 0.16](https://ziglang.org). The window form links a
-few ubiquitous system libraries (OpenGL/X11, FreeType, HarfBuzz, FFmpeg); the
+few ubiquitous system libraries (OpenGL/X11, FreeType, HarfBuzz); the
 rest is vendored. **No Zig package dependencies — the build fetches nothing.**
 
 ```sh
@@ -108,7 +107,7 @@ zig build check      # formatting gate
 
 - **Window** — [sokol](https://github.com/floooh/sokol) (vendored) for the
   window and immediate-mode rendering; FreeType + HarfBuzz for text, stb_image
-  for pictures, miniaudio for sound, FFmpeg for video.
+  for pictures, miniaudio for sound.
 - **Terminal / HTML / PDF** — pure Zig; the HTML is self-contained (images
   embedded), the PDF is written by hand.
 - Why vendored + system libraries instead of packages?
