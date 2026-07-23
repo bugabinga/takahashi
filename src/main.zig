@@ -8,6 +8,7 @@ const window = @import("window.zig");
 const terminal = @import("terminal.zig");
 const html = @import("html.zig");
 const pdf = @import("pdf.zig");
+const sync = @import("sync.zig");
 
 /// As of Zig 0.16 the runtime hands `main` a `std.process.Init`, which carries
 /// the command line arguments, an I/O implementation and allocators.
@@ -40,9 +41,16 @@ pub fn main(init: std.process.Init) !void {
     var doc = try document.process(gpa, io, base_dir, source, config.path, deck);
     defer doc.deinit();
 
+    // The speaker companion follows a running presentation of this deck rather
+    // than presenting itself (SPEC 2.1).
+    if (config.speaker) {
+        try runSpeaker(gpa, io, config.path, doc.slides);
+        return;
+    }
+
     switch (config.form) {
-        .window => window.present(gpa, io, base_dir, deck_dir, doc.slides),
-        .terminal => try terminal.present(gpa, io, doc.slides, detectGraphics(init.environ_map)),
+        .window => window.present(gpa, io, base_dir, deck_dir, config.path, doc.slides),
+        .terminal => try terminal.present(gpa, io, config.path, doc.slides, detectGraphics(init.environ_map)),
         .html => {
             const out = try html.render(gpa, doc.slides);
             defer gpa.free(out);
@@ -56,6 +64,49 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // TODO: watch mode (SPEC 2.2) — when config.watch, re-render on file change.
+}
+
+/// The `--speaker` companion (SPEC 2.1): follow a running presentation of this
+/// deck via the shared state file and render the current slide's notes in this
+/// terminal, updating as the presenter navigates. Exits when the presenter does.
+fn runSpeaker(gpa: std.mem.Allocator, io: std.Io, deck_path: []const u8, slides: []const document.Slide) !void {
+    if (slides.len == 0) return;
+    var follower = try sync.Follower.init(gpa, io, deck_path);
+    defer follower.deinit();
+
+    var out_buffer: [8192]u8 = undefined;
+    var file_writer = std.Io.File.stdout().writer(io, &out_buffer);
+    const w = &file_writer.interface;
+
+    // Wait briefly for a presentation to appear before giving up.
+    var tries: usize = 0;
+    while (follower.current() == null and tries < 25) : (tries += 1) follower.wait();
+    if (follower.current() == null) {
+        log.err("no running taka presentation for this deck — start one first", .{});
+        return;
+    }
+
+    var last: ?usize = null;
+    var misses: usize = 0;
+    while (misses <= 8) { // exit once the presenter's state file is gone (~1s)
+        if (follower.current()) |index| {
+            misses = 0;
+            const shown = @min(index, slides.len - 1);
+            if (last == null or last.? != shown) {
+                renderSpeakerFrame(w, slides, shown);
+                last = shown;
+            }
+        } else misses += 1;
+        follower.wait();
+    }
+}
+
+/// Render one notes frame for the companion's current slide.
+fn renderSpeakerFrame(w: *std.Io.Writer, slides: []const document.Slide, index: usize) void {
+    const total = slides.len;
+    const preview = if (index + 1 < total) document.previewOf(slides[index + 1]) else "";
+    const size = terminal.terminalSize(std.Io.File.stdout().handle);
+    terminal.renderNotesFrame(w, slides[index].notes, index, total, preview, size.cols) catch {};
 }
 
 /// Detect the terminal's inline-graphics support for the terminal form

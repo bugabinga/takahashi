@@ -16,6 +16,9 @@ pub const Config = struct {
     out_path: ?[]const u8 = null,
     /// Watch the source and re-render on change (SPEC 2.2).
     watch: bool = false,
+    /// Run as the speaker-notes companion for an already-running presentation
+    /// of this deck (SPEC 2.1), rather than presenting.
+    speaker: bool = false,
 };
 
 pub const Error = error{
@@ -42,6 +45,8 @@ pub fn parse(args: []const [:0]const u8) Error!Config {
             config.out_path = args[i];
         } else if (std.mem.eql(u8, arg, "--watch") or std.mem.eql(u8, arg, "-w")) {
             config.watch = true;
+        } else if (std.mem.eql(u8, arg, "--speaker") or std.mem.eql(u8, arg, "-s")) {
+            config.speaker = true;
         } else if (std.mem.eql(u8, arg, "-")) {
             config.path = arg; // standard input
             have_path = true;
@@ -75,6 +80,15 @@ test "parses form, output and watch flags in any order" {
 
     try std.testing.expectError(error.UnknownForm, parse(&.{ "taka", "--to", "svg", "d.taka" }));
     try std.testing.expectError(error.MissingValue, parse(&.{ "taka", "--to" }));
+}
+
+test "parses the speaker companion flag" {
+    const c = try parse(&.{ "taka", "--speaker", "deck.taka" });
+    try std.testing.expectEqual(true, c.speaker);
+    try std.testing.expectEqualStrings("deck.taka", c.path);
+
+    const d = try parse(&.{ "taka", "deck.taka" });
+    try std.testing.expectEqual(false, d.speaker);
 }
 
 test {

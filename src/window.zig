@@ -18,6 +18,7 @@ const text = @import("text.zig");
 const image = @import("image.zig");
 const audio = @import("audio.zig");
 const terminal = @import("terminal.zig");
+const sync = @import("sync.zig");
 
 const log = std.log.scoped(.takahashi);
 const padding_px: f32 = 48;
@@ -45,6 +46,8 @@ const State = struct {
     // Speaker notes are mirrored to the controlling terminal, if there is one.
     notes_tty: bool = false,
     notes_writer: std.Io.File.Writer = undefined,
+    // Current slide index published for a `--speaker` companion (SPEC 2.1).
+    publisher: ?sync.Publisher = null,
 };
 
 // Backing buffer for the notes writer; lives as long as the file-scope state.
@@ -69,6 +72,7 @@ pub fn present(
     io: std.Io,
     base_dir: std.Io.Dir,
     deck_dir: []const u8,
+    deck_path: []const u8,
     slides: []const document.Slide,
 ) void {
     const renderer = text.init(gpa) catch |err| {
@@ -91,6 +95,8 @@ pub fn present(
     if (state.notes_tty) {
         state.notes_writer = std.Io.File.stdout().writer(io, &notes_buffer);
     }
+    // Publish the current slide for a `--speaker` companion (best effort).
+    state.publisher = sync.Publisher.init(gpa, io, deck_path) catch null;
     log.info("presenting {d} slide(s)", .{slides.len});
 
     var desc: sk.sapp_desc = .{
@@ -170,6 +176,7 @@ fn event(ev: [*c]const sk.sapp_event) callconv(.c) void {
 
 fn cleanup() callconv(.c) void {
     releaseSlide();
+    if (state.publisher) |*p| p.deinit();
     state.player.deinit();
     text.deinit(&state.renderer, state.gpa);
     state.arena.deinit();
@@ -199,8 +206,12 @@ fn prepareSlide(w: i32, h: i32) void {
     state.prepared = state.show.current;
     state.prepared_w = w;
     state.prepared_h = h;
-    // Refresh the terminal notes on slide changes only, not window resizes.
-    if (slide_changed) emitNotes();
+    // On slide changes only (not window resizes): refresh the terminal notes
+    // and publish the index for any `--speaker` companion.
+    if (slide_changed) {
+        emitNotes();
+        if (state.publisher) |*p| p.publish(state.show.current);
+    }
 }
 
 /// Print the current slide's speaker notes to the controlling terminal, synced
@@ -209,7 +220,7 @@ fn emitNotes() void {
     if (!state.notes_tty) return;
     const total = state.slides.len;
     const current = state.show.current;
-    const preview = if (current + 1 < total) previewOf(state.slides[current + 1]) else "";
+    const preview = if (current + 1 < total) document.previewOf(state.slides[current + 1]) else "";
     const size = terminal.terminalSize(std.Io.File.stdout().handle);
     terminal.renderNotesFrame(
         &state.notes_writer.interface,
@@ -219,14 +230,6 @@ fn emitNotes() void {
         preview,
         size.cols,
     ) catch {};
-}
-
-/// The first line of a slide's visible text, for the "next" preview. Borrows.
-fn previewOf(slide: document.Slide) []const u8 {
-    if (slide.spans.len == 0) return "";
-    const first = slide.spans[0].text;
-    const end = std.mem.indexOfScalar(u8, first, '\n') orelse first.len;
-    return first[0..end];
 }
 
 fn layoutText(arena: std.mem.Allocator, slide: document.Slide, w: i32, h: i32) void {

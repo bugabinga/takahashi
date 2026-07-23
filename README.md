@@ -89,10 +89,16 @@ zig build run -- examples/demo/demo.taka --to pdf  -o deck.pdf
 ```
 
 The window and terminal forms are interactive: **→ / Space** advance, **←**
-back, **Home / End** jump, **q / Esc** quit. Launch the window from a terminal
-and the current slide's speaker notes appear there, synced as you navigate —
-the window goes on the projector, the notes stay on your screen. In the
-browser, **p** opens a synced presenter window with the notes.
+back, **Home / End** jump, **q / Esc** quit. Speaker notes stay off the
+audience's screen:
+
+- **Window** — launch it from a terminal and the current slide's notes appear
+  there, synced as you navigate. The window goes on the projector; the notes
+  stay on your screen.
+- **Terminal** — the terminal *is* the slides, so run a second instance
+  alongside it: `taka <deck>.taka --speaker` follows the running presentation
+  and shows the notes in its own terminal.
+- **Browser** — press **p** for a synced presenter window with the notes.
 
 ## Quick start
 

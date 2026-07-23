@@ -108,6 +108,15 @@ fn appendNote(arena: Allocator, notes: *std.ArrayList(u8), call: function.Call) 
     try notes.appendSlice(arena, note);
 }
 
+/// The first line of a slide's visible text, for a "next slide" preview in the
+/// presenter views (SPEC 2.1). Borrows the slide's span text.
+pub fn previewOf(slide: Slide) []const u8 {
+    if (slide.spans.len == 0) return "";
+    const first = slide.spans[0].text;
+    const end = std.mem.indexOfScalar(u8, first, '\n') orelse first.len;
+    return first[0..end];
+}
+
 fn pathOf(call: function.Call) []const u8 {
     for (call.tokens) |token| {
         if (token.kind == .arg) return token.text;

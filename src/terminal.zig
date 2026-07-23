@@ -18,6 +18,7 @@ const Allocator = std.mem.Allocator;
 
 const document = @import("document.zig");
 const Presentation = @import("presentation.zig").Presentation;
+const sync = @import("sync.zig");
 const Slide = document.Slide;
 const Span = document.Span;
 
@@ -38,7 +39,13 @@ const hide_cursor = "\x1b[?25l";
 const show_cursor = "\x1b[?25h";
 const clear_home = "\x1b[2J\x1b[H";
 
-pub fn present(gpa: Allocator, io: std.Io, slides: []const Slide, graphics: Graphics) !void {
+pub fn present(
+    gpa: Allocator,
+    io: std.Io,
+    deck_path: []const u8,
+    slides: []const Slide,
+    graphics: Graphics,
+) !void {
     const stdin = std.Io.File.stdin();
     const stdout = std.Io.File.stdout();
     var out_buffer: [1 << 14]u8 = undefined;
@@ -52,7 +59,7 @@ pub fn present(gpa: Allocator, io: std.Io, slides: []const Slide, graphics: Grap
         try w.flush();
         return;
     }
-    try runInteractive(gpa, w, stdin.handle, stdout.handle, slides, graphics);
+    try runInteractive(gpa, io, w, stdin.handle, stdout.handle, deck_path, slides, graphics);
 }
 
 /// The interactive loop: alt-screen + raw mode, render the current slide, read a
@@ -60,9 +67,11 @@ pub fn present(gpa: Allocator, io: std.Io, slides: []const Slide, graphics: Grap
 /// restored by the defers, including on error.
 fn runInteractive(
     gpa: Allocator,
+    io: std.Io,
     w: *std.Io.Writer,
     in_fd: posix.fd_t,
     out_fd: posix.fd_t,
+    deck_path: []const u8,
     slides: []const Slide,
     graphics: Graphics,
 ) !void {
@@ -76,12 +85,17 @@ fn runInteractive(
         w.flush() catch {};
     }
 
+    // Publish the current slide for a `--speaker` companion (best effort).
+    var publisher: ?sync.Publisher = sync.Publisher.init(gpa, io, deck_path) catch null;
+    defer if (publisher) |*p| p.deinit();
+
     var show = Presentation.init(slides.len);
     var frame = std.heap.ArenaAllocator.init(gpa);
     defer frame.deinit();
     var key: [8]u8 = undefined;
     while (true) { // interactive loop: bounded only by the quit key
         assert(show.current < slides.len);
+        if (publisher) |*p| p.publish(show.current);
         _ = frame.reset(.retain_capacity);
         try renderSlide(w, frame.allocator(), slides, show.current, terminalSize(out_fd), graphics);
         try w.flush();

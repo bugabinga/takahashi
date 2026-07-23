@@ -116,6 +116,12 @@ and a sense of position in the talk. They provide, at minimum:
 - a presenter affordance surfacing the current slide's speaker notes,
 - a way to quit.
 
+The presenter affordance keeps speaker notes on a surface the audience does
+not see. The window prints them to its controlling terminal; a presentation
+can also be followed by a second instance launched with `--speaker <file>`,
+which shows the current slide's notes in its own terminal and stays synced to
+the running presentation.
+
 ### 2.2 Authoring (watch mode)
 
 While writing a presentation, taka can watch the source file and reflect
@@ -153,7 +159,10 @@ watching the window — never sees them.
 A text-based application in a terminal emulator. Interactive (§2.1). Text
 markup and layout degrade gracefully to what the terminal supports: images
 are drawn inline where the terminal implements a graphics protocol, and
-noted textually otherwise. Notes are shown via the presenter affordance.
+noted textually otherwise. Because the terminal itself is the audience view,
+notes are surfaced by a second instance launched with `--speaker` (§2.1),
+which follows the running presentation and shows the current slide's notes
+in its own terminal.
 
 ### 3.3 PDF
 
