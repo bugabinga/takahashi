@@ -42,7 +42,7 @@ pub fn main(init: std.process.Init) !void {
 
     switch (config.form) {
         .window => window.present(gpa, io, base_dir, deck_dir, doc.slides),
-        .terminal => try terminal.present(io, doc.slides, detectGraphics(init.environ_map)),
+        .terminal => try terminal.present(gpa, io, doc.slides, detectGraphics(init.environ_map)),
         .html => {
             const out = try html.render(gpa, doc.slides);
             defer gpa.free(out);
