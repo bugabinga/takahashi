@@ -2,7 +2,6 @@ const std = @import("std");
 const log = std.log.scoped(.takahashi);
 
 const cli = @import("cli.zig");
-const parser = @import("parser.zig");
 const document = @import("document.zig");
 const window = @import("window.zig");
 const terminal = @import("terminal.zig");
@@ -22,23 +21,19 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     const config = cli.parse(args) catch |err| {
         log.err(
-            "usage: takahashi [--to window|terminal|pdf|html] [-o <path>] [--watch] <file.taka>",
+            "usage: takahashi [--to window|terminal|pdf|html] [-o <path>] " ++
+                "[--watch] [--speaker] <file.taka|->",
             .{},
         );
         return err;
     };
 
-    // TODO: config.path == "-" should read the deck from standard input.
-    const source = try std.Io.Dir.cwd().readFileAlloc(io, config.path, gpa, .unlimited);
-    defer gpa.free(source);
-
-    var deck = try parser.parse(gpa, source);
-    defer deck.deinit(gpa);
-
-    // Functions resolve relative to the deck's directory (SPEC 1.3).
-    const deck_dir = std.fs.path.dirname(config.path) orelse ".";
+    // Functions resolve relative to the deck's directory (SPEC 1.3); a deck read
+    // from standard input (`-`) resolves against the current directory.
+    const stdin_deck = std.mem.eql(u8, config.path, "-");
+    const deck_dir = if (stdin_deck) "." else (std.fs.path.dirname(config.path) orelse ".");
     const base_dir = try std.Io.Dir.cwd().openDir(io, deck_dir, .{});
-    var doc = try document.process(gpa, io, base_dir, source, config.path, deck);
+    var doc = try document.load(gpa, io, base_dir, config.path);
     defer doc.deinit();
 
     // The speaker companion follows a running presentation of this deck rather

@@ -7,6 +7,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const slide_mod = @import("slide.zig");
+const parser = @import("parser.zig");
 const function = @import("function.zig");
 const markup = @import("markup.zig");
 const run = @import("run.zig").run;
@@ -39,6 +40,26 @@ pub const Document = struct {
         document.arena.deinit();
     }
 };
+
+/// Read a deck's source (the file at `path`, or standard input when `path` is
+/// `-`), parse it, and process it into a self-contained Document (SPEC 1). The
+/// Document owns its arena, so the source is freed here.
+pub fn load(gpa: Allocator, io: std.Io, base_dir: std.Io.Dir, path: []const u8) !Document {
+    const source = try readSource(gpa, io, path);
+    defer gpa.free(source);
+    var deck = try parser.parse(gpa, source);
+    defer deck.deinit(gpa);
+    return process(gpa, io, base_dir, source, path, deck);
+}
+
+fn readSource(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
+    if (std.mem.eql(u8, path, "-")) {
+        var buffer: [4096]u8 = undefined;
+        var reader = std.Io.File.stdin().readerStreaming(io, &buffer);
+        return reader.interface.allocRemaining(gpa, .unlimited);
+    }
+    return std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
+}
 
 pub fn process(
     gpa: Allocator,
