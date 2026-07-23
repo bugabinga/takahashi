@@ -10,10 +10,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const exe = b.addExecutable(.{ .name = "takahashi", .root_module = exe_mod });
+    const os = target.result.os.tag;
 
     // Window output form (SPEC 3.1): the vendored sokol single-header C
-    // libraries, compiled here. No package dependency is fetched — only system
-    // OpenGL/X11 libraries are linked (installed by the SessionStart hook).
+    // libraries, compiled here. No package dependency is fetched; sokol selects
+    // its backend (GL on Linux, Metal on macOS, D3D11 on Windows) from the
+    // target, and we link that platform's window/graphics system libraries.
     const sokol_c = b.addTranslateC(.{
         .root_source_file = b.path("vendor/sokol/sokol.h"),
         .target = target,
@@ -21,13 +23,15 @@ pub fn build(b: *std.Build) void {
     });
     sokol_c.addIncludePath(b.path("vendor/sokol"));
     exe_mod.addImport("sokol", sokol_c.createModule());
-    exe_mod.addCSourceFile(.{ .file = b.path("vendor/sokol/sokol.c") });
+    // sokol_app on macOS is Objective-C; the impl unit must be compiled as such.
+    const sokol_flags: []const []const u8 = if (os == .macos)
+        &.{ "-x", "objective-c", "-fobjc-arc" }
+    else
+        &.{};
+    exe_mod.addCSourceFile(.{ .file = b.path("vendor/sokol/sokol.c"), .flags = sokol_flags });
     exe_mod.addIncludePath(b.path("vendor/sokol"));
     exe_mod.link_libc = true;
-    exe_mod.linkSystemLibrary("GL", .{});
-    exe_mod.linkSystemLibrary("X11", .{});
-    exe_mod.linkSystemLibrary("Xi", .{});
-    exe_mod.linkSystemLibrary("Xcursor", .{});
+    linkWindowSystem(exe_mod, os);
 
     // Text (FreeType+HarfBuzz), images (stb_image) and audio (miniaudio) for the
     // window form. All vendored single-header or system libs; nothing is
@@ -99,22 +103,67 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&fmt.step);
 }
 
-/// Wire the text/image/audio C dependencies into `mod`. See the module
-/// files and docs/window-backend.md for the rationale (vendored + system libs).
+/// Link the window/graphics system libraries for `os`. sokol selects a backend
+/// per target (GL / Metal / D3D11), each needing different platform libraries.
+/// Only the Linux path runs in CI; the macOS and Windows paths follow sokol's
+/// documented requirements and await verification on those platforms. See
+/// docs/cross-platform.md.
+fn linkWindowSystem(mod: *std.Build.Module, os: std.Target.Os.Tag) void {
+    switch (os) {
+        .linux => {
+            mod.linkSystemLibrary("GL", .{});
+            mod.linkSystemLibrary("X11", .{});
+            mod.linkSystemLibrary("Xi", .{});
+            mod.linkSystemLibrary("Xcursor", .{});
+        },
+        .macos => {
+            mod.linkFramework("Cocoa", .{});
+            mod.linkFramework("QuartzCore", .{});
+            mod.linkFramework("Metal", .{});
+            mod.linkFramework("MetalKit", .{});
+        },
+        .windows => {
+            for ([_][]const u8{ "gdi32", "user32", "shell32", "ole32", "d3d11", "dxgi" }) |lib| {
+                mod.linkSystemLibrary(lib, .{});
+            }
+        },
+        else => {},
+    }
+}
+
+/// Wire the text/image/audio C dependencies into `mod`. Images (stb_image) are
+/// vendored and portable; text (FreeType + HarfBuzz) and audio (miniaudio) need
+/// per-platform system libraries. See docs/cross-platform.md for the rationale
+/// and the current per-OS verification status.
 fn addMedia(b: *std.Build, mod: *std.Build.Module, target: anytype, optimize: anytype) void {
-    // text.zig: FreeType + HarfBuzz (system libraries).
+    const os = target.result.os.tag;
+
+    // text.zig: FreeType + HarfBuzz (system libraries; provisioned per platform,
+    // e.g. apt on Linux, Homebrew on macOS, vcpkg on Windows).
     const text_c = b.addTranslateC(.{
         .root_source_file = b.path("src/text_c.h"),
         .target = target,
         .optimize = optimize,
     });
-    text_c.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
-    text_c.addIncludePath(.{ .cwd_relative = "/usr/include/harfbuzz" });
+    switch (os) {
+        .linux => {
+            text_c.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+            text_c.addIncludePath(.{ .cwd_relative = "/usr/include/harfbuzz" });
+        },
+        .macos => {
+            // Homebrew (Apple Silicon then Intel prefixes).
+            text_c.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include/freetype2" });
+            text_c.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include/harfbuzz" });
+            text_c.addIncludePath(.{ .cwd_relative = "/usr/local/include/freetype2" });
+            text_c.addIncludePath(.{ .cwd_relative = "/usr/local/include/harfbuzz" });
+        },
+        else => {},
+    }
     mod.addImport("text_c", text_c.createModule());
     mod.linkSystemLibrary("freetype", .{});
     mod.linkSystemLibrary("harfbuzz", .{});
 
-    // image.zig: vendored stb_image.
+    // image.zig: vendored stb_image — portable C, no system libraries.
     const image_c = b.addTranslateC(.{
         .root_source_file = b.path("src/image_c.h"),
         .target = target,
@@ -125,7 +174,8 @@ fn addMedia(b: *std.Build, mod: *std.Build.Module, target: anytype, optimize: an
     mod.addCSourceFile(.{ .file = b.path("vendor/stb/stb_image_impl.c") });
     mod.addIncludePath(b.path("vendor/stb"));
 
-    // audio.zig: vendored miniaudio (dlopens ALSA at runtime).
+    // audio.zig: vendored miniaudio; its backend links different platform audio
+    // libraries (ALSA via dlopen on Linux, CoreAudio on macOS, WASAPI on Win).
     const audio_c = b.addTranslateC(.{
         .root_source_file = b.path("src/audio_c.h"),
         .target = target,
@@ -135,7 +185,18 @@ fn addMedia(b: *std.Build, mod: *std.Build.Module, target: anytype, optimize: an
     mod.addImport("audio_c", audio_c.createModule());
     mod.addCSourceFile(.{ .file = b.path("vendor/miniaudio/miniaudio_impl.c") });
     mod.addIncludePath(b.path("vendor/miniaudio"));
-    mod.linkSystemLibrary("pthread", .{});
-    mod.linkSystemLibrary("m", .{});
-    mod.linkSystemLibrary("dl", .{});
+    switch (os) {
+        .linux => {
+            mod.linkSystemLibrary("pthread", .{});
+            mod.linkSystemLibrary("m", .{});
+            mod.linkSystemLibrary("dl", .{});
+        },
+        .macos => {
+            mod.linkFramework("CoreFoundation", .{});
+            mod.linkFramework("CoreAudio", .{});
+            mod.linkFramework("AudioToolbox", .{});
+        },
+        .windows => mod.linkSystemLibrary("ole32", .{}),
+        else => {},
+    }
 }
