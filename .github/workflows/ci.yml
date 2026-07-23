@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Offline core: pure Zig, no system libraries — runs on every platform.
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.16.0
+      - name: Unit and integration tests (offline, headless)
+        run: zig build test
+      - name: Formatting gate
+        run: zig build check
+
+  # Full build including the window form: needs FreeType/HarfBuzz plus the
+  # platform window/graphics libraries. This is where the per-OS linking in
+  # build.zig is exercised on a real machine (see docs/cross-platform.md).
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.16.0
+      - name: Install system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libx11-dev libxi-dev libxcursor-dev \
+            libxrandr-dev libxinerama-dev libxext-dev \
+            libfreetype-dev libharfbuzz-dev
+      - name: Install system libraries (macOS)
+        if: runner.os == 'macOS'
+        run: brew install freetype harfbuzz
+      - name: Build the app (all output forms)
+        run: zig build
