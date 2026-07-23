@@ -1,0 +1,13 @@
+# Normalize line endings to LF on every platform. Without this, Windows
+# checkouts convert source files to CRLF and `zig fmt --check` reports them as
+# non-conforming. Binary assets are marked so git never touches their bytes.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.wav binary
+*.mp3 binary
+*.ttf binary
+*.otf binary
