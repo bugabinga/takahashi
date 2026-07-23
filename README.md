@@ -88,9 +88,11 @@ zig build run -- examples/demo/demo.taka --to html -o deck.html
 zig build run -- examples/demo/demo.taka --to pdf  -o deck.pdf
 ```
 
-In the interactive forms: **→ / Space** advance, **←** back, **Home / End**
-jump, **Esc** quits. In the browser, **p** opens a synced presenter window
-with the current slide's speaker notes.
+The window and terminal forms are interactive: **→ / Space** advance, **←**
+back, **Home / End** jump, **q / Esc** quit. Launch the window from a terminal
+and the current slide's speaker notes appear there, synced as you navigate —
+the window goes on the projector, the notes stay on your screen. In the
+browser, **p** opens a synced presenter window with the notes.
 
 ## Quick start
 

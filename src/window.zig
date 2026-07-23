@@ -2,6 +2,12 @@
 //! sokol libraries. Text is rendered with FreeType + HarfBuzz (proportional,
 //! scaled to fill the frame, CJK-aware), images are laid out in an equal grid
 //! behind the text, and audio plays on entry.
+//!
+//! Speaker notes (SPEC 2.1) are not drawn in the window — the audience must
+//! never see them. Instead, when launched from a terminal, the window prints
+//! the current slide's notes to that controlling terminal as the speaker
+//! navigates, using the shared notes renderer from `terminal.zig`. The window
+//! goes on the projector; the speaker reads notes on their own screen.
 
 const std = @import("std");
 const sk = @import("sokol");
@@ -11,6 +17,7 @@ const Presentation = @import("presentation.zig").Presentation;
 const text = @import("text.zig");
 const image = @import("image.zig");
 const audio = @import("audio.zig");
+const terminal = @import("terminal.zig");
 
 const log = std.log.scoped(.takahashi);
 const padding_px: f32 = 48;
@@ -35,7 +42,13 @@ const State = struct {
     text_tex: ?Texture = null,
     text_vertices: []const text.Vertex = &.{},
     images: []ImageDraw = &.{},
+    // Speaker notes are mirrored to the controlling terminal, if there is one.
+    notes_tty: bool = false,
+    notes_writer: std.Io.File.Writer = undefined,
 };
+
+// Backing buffer for the notes writer; lives as long as the file-scope state.
+var notes_buffer: [4096]u8 = undefined;
 
 const Texture = struct {
     image: sk.sg_image,
@@ -73,6 +86,11 @@ pub fn present(
         .player = audio.Player.init() catch .{},
         .arena = std.heap.ArenaAllocator.init(gpa),
     };
+    // Mirror speaker notes to the launching terminal, if stdout is one.
+    state.notes_tty = std.Io.File.stdout().isTty(io) catch false;
+    if (state.notes_tty) {
+        state.notes_writer = std.Io.File.stdout().writer(io, &notes_buffer);
+    }
     log.info("presenting {d} slide(s)", .{slides.len});
 
     var desc: sk.sapp_desc = .{
@@ -168,6 +186,7 @@ fn releaseSlide() void {
 }
 
 fn prepareSlide(w: i32, h: i32) void {
+    const slide_changed = if (state.prepared) |p| p != state.show.current else true;
     releaseSlide();
     _ = state.arena.reset(.retain_capacity);
     const arena = state.arena.allocator();
@@ -180,6 +199,34 @@ fn prepareSlide(w: i32, h: i32) void {
     state.prepared = state.show.current;
     state.prepared_w = w;
     state.prepared_h = h;
+    // Refresh the terminal notes on slide changes only, not window resizes.
+    if (slide_changed) emitNotes();
+}
+
+/// Print the current slide's speaker notes to the controlling terminal, synced
+/// to navigation (SPEC 2.1). No-op when there is no controlling terminal.
+fn emitNotes() void {
+    if (!state.notes_tty) return;
+    const total = state.slides.len;
+    const current = state.show.current;
+    const preview = if (current + 1 < total) previewOf(state.slides[current + 1]) else "";
+    const size = terminal.terminalSize(std.Io.File.stdout().handle);
+    terminal.renderNotesFrame(
+        &state.notes_writer.interface,
+        state.slides[current].notes,
+        current,
+        total,
+        preview,
+        size.cols,
+    ) catch {};
+}
+
+/// The first line of a slide's visible text, for the "next" preview. Borrows.
+fn previewOf(slide: document.Slide) []const u8 {
+    if (slide.spans.len == 0) return "";
+    const first = slide.spans[0].text;
+    const end = std.mem.indexOfScalar(u8, first, '\n') orelse first.len;
+    return first[0..end];
 }
 
 fn layoutText(arena: std.mem.Allocator, slide: document.Slide, w: i32, h: i32) void {

@@ -144,7 +144,9 @@ Each form maps speaker notes as noted below.
 ### 3.1 Window
 
 A full-screen graphical window (X11, Wayland, macOS, Windows). Interactive
-(§2.1). Notes are shown via the presenter affordance.
+(§2.1). The presenter affordance prints the current slide's notes to the
+controlling terminal, synced as the speaker navigates, so the audience —
+watching the window — never sees them.
 
 ### 3.2 Terminal
 
