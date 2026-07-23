@@ -8,6 +8,7 @@ const terminal = @import("terminal.zig");
 const html = @import("html.zig");
 const pdf = @import("pdf.zig");
 const sync = @import("sync.zig");
+const watch = @import("watch.zig");
 
 /// As of Zig 0.16 the runtime hands `main` a `std.process.Init`, which carries
 /// the command line arguments, an I/O implementation and allocators.
@@ -44,21 +45,60 @@ pub fn main(init: std.process.Init) !void {
     }
 
     switch (config.form) {
-        .window => window.present(gpa, io, base_dir, deck_dir, config.path, doc.slides),
-        .terminal => try terminal.present(gpa, io, config.path, doc.slides, detectGraphics(init.environ_map)),
-        .html => {
-            const out = try html.render(gpa, doc.slides);
-            defer gpa.free(out);
-            try writeOutput(io, config.out_path, out);
-        },
-        .pdf => {
-            const out = try pdf.render(gpa, doc.slides);
-            defer gpa.free(out);
-            try writeOutput(io, config.out_path, out);
-        },
+        .window => window.present(gpa, io, base_dir, deck_dir, config.path, doc.slides, config.watch),
+        .terminal => try terminal.present(
+            gpa,
+            io,
+            base_dir,
+            config.path,
+            doc.slides,
+            detectGraphics(init.environ_map),
+            config.watch,
+        ),
+        .html, .pdf => try renderFileForm(gpa, io, base_dir, config, doc.slides),
     }
+}
 
-    // TODO: watch mode (SPEC 2.2) — when config.watch, re-render on file change.
+/// Render a file form (HTML/PDF) once, then — under `--watch` — regenerate it
+/// whenever the deck changes on disk (SPEC 2.2). Stdin decks cannot be watched.
+fn renderFileForm(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    base_dir: std.Io.Dir,
+    config: cli.Config,
+    slides: []const document.Slide,
+) !void {
+    try emitFileForm(gpa, io, config, slides);
+    if (!config.watch or std.mem.eql(u8, config.path, "-")) return;
+
+    var watcher = watch.Watcher.init(io, config.path);
+    while (true) { // watch loop: bounded only by the user interrupting
+        std.Io.sleep(io, std.Io.Duration.fromMilliseconds(200), .awake) catch {};
+        if (!watcher.changed()) continue;
+        var reloaded = document.load(gpa, io, base_dir, config.path) catch |err| {
+            log.warn("reload failed: {t}", .{err});
+            continue;
+        };
+        defer reloaded.deinit();
+        emitFileForm(gpa, io, config, reloaded.slides) catch |err| {
+            log.warn("re-render failed: {t}", .{err});
+        };
+    }
+}
+
+fn emitFileForm(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    config: cli.Config,
+    slides: []const document.Slide,
+) !void {
+    const out = switch (config.form) {
+        .html => try html.render(gpa, slides),
+        .pdf => try pdf.render(gpa, slides),
+        else => unreachable,
+    };
+    defer gpa.free(out);
+    try writeOutput(io, config.out_path, out);
 }
 
 /// The `--speaker` companion (SPEC 2.1): follow a running presentation of this

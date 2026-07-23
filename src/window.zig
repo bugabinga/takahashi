@@ -10,6 +10,7 @@
 //! goes on the projector; the speaker reads notes on their own screen.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const sk = @import("sokol");
 
 const document = @import("document.zig");
@@ -19,6 +20,7 @@ const image = @import("image.zig");
 const audio = @import("audio.zig");
 const terminal = @import("terminal.zig");
 const sync = @import("sync.zig");
+const watch = @import("watch.zig");
 
 const log = std.log.scoped(.takahashi);
 const padding_px: f32 = 48;
@@ -48,6 +50,11 @@ const State = struct {
     notes_writer: std.Io.File.Writer = undefined,
     // Current slide index published for a `--speaker` companion (SPEC 2.1).
     publisher: ?sync.Publisher = null,
+    // --watch: reload the deck in place when the file changes (SPEC 2.2).
+    deck_path: []const u8 = "",
+    watcher: ?watch.Watcher = null,
+    reloaded: ?document.Document = null,
+    watch_tick: u32 = 0,
 };
 
 // Backing buffer for the notes writer; lives as long as the file-scope state.
@@ -74,6 +81,7 @@ pub fn present(
     deck_dir: []const u8,
     deck_path: []const u8,
     slides: []const document.Slide,
+    watch_enabled: bool,
 ) void {
     const renderer = text.init(gpa) catch |err| {
         log.err("font init failed: {t}", .{err});
@@ -97,6 +105,8 @@ pub fn present(
     }
     // Publish the current slide for a `--speaker` companion (best effort).
     state.publisher = sync.Publisher.init(gpa, io, deck_path) catch null;
+    state.deck_path = deck_path;
+    if (watch_enabled) state.watcher = watch.Watcher.init(io, deck_path);
     log.info("presenting {d} slide(s)", .{slides.len});
 
     var desc: sk.sapp_desc = .{
@@ -136,6 +146,7 @@ fn init() callconv(.c) void {
 fn frame() callconv(.c) void {
     const w = sk.sapp_width();
     const h = sk.sapp_height();
+    maybeReload();
     if (state.prepared != state.show.current or state.prepared_w != w or state.prepared_h != h) {
         prepareSlide(w, h);
     }
@@ -176,6 +187,7 @@ fn event(ev: [*c]const sk.sapp_event) callconv(.c) void {
 
 fn cleanup() callconv(.c) void {
     releaseSlide();
+    if (state.reloaded) |*d| d.deinit();
     if (state.publisher) |*p| p.deinit();
     state.player.deinit();
     text.deinit(&state.renderer, state.gpa);
@@ -190,6 +202,29 @@ fn releaseSlide() void {
     state.text_tex = null;
     for (state.images) |img| img.tex.destroy();
     state.images = &.{};
+}
+
+/// Under --watch, poll the deck (throttled) and reload it in place when it
+/// changes, keeping the current position (SPEC 2.2). A load failure or an empty
+/// deck mid-edit is ignored, so a bad save never tears down the presentation.
+fn maybeReload() void {
+    if (state.watcher == null) return;
+    state.watch_tick +%= 1;
+    if (state.watch_tick % 12 != 0) return; // ~5 checks/sec at 60 fps
+    if (!state.watcher.?.changed()) return;
+
+    var next = document.load(state.gpa, state.io, state.base_dir, state.deck_path) catch return;
+    if (next.slides.len == 0) {
+        next.deinit();
+        return;
+    }
+    if (state.reloaded) |*old| old.deinit();
+    state.reloaded = next;
+    state.slides = next.slides;
+    state.show.count = next.slides.len;
+    if (state.show.current >= state.show.count) state.show.current = state.show.count - 1;
+    state.prepared = null; // force prepareSlide to rebuild this slide's resources
+    assert(state.show.current < state.slides.len);
 }
 
 fn prepareSlide(w: i32, h: i32) void {

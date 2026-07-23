@@ -19,6 +19,7 @@ const Allocator = std.mem.Allocator;
 const document = @import("document.zig");
 const Presentation = @import("presentation.zig").Presentation;
 const sync = @import("sync.zig");
+const watch = @import("watch.zig");
 const Slide = document.Slide;
 const Span = document.Span;
 
@@ -42,9 +43,11 @@ const clear_home = "\x1b[2J\x1b[H";
 pub fn present(
     gpa: Allocator,
     io: std.Io,
+    base_dir: std.Io.Dir,
     deck_path: []const u8,
     slides: []const Slide,
     graphics: Graphics,
+    watch_enabled: bool,
 ) !void {
     const stdin = std.Io.File.stdin();
     const stdout = std.Io.File.stdout();
@@ -59,57 +62,106 @@ pub fn present(
         try w.flush();
         return;
     }
-    try runInteractive(gpa, io, w, stdin.handle, stdout.handle, deck_path, slides, graphics);
+    try runInteractive(.{
+        .gpa = gpa,
+        .io = io,
+        .base_dir = base_dir,
+        .w = w,
+        .in_fd = stdin.handle,
+        .out_fd = stdout.handle,
+        .deck_path = deck_path,
+        .slides = slides,
+        .graphics = graphics,
+        .watch_enabled = watch_enabled,
+    });
 }
 
-/// The interactive loop: alt-screen + raw mode, render the current slide, read a
-/// key, apply it, repeat until the speaker quits. Terminal state is always
-/// restored by the defers, including on error.
-fn runInteractive(
+const Interactive = struct {
     gpa: Allocator,
     io: std.Io,
+    base_dir: std.Io.Dir,
     w: *std.Io.Writer,
     in_fd: posix.fd_t,
     out_fd: posix.fd_t,
     deck_path: []const u8,
     slides: []const Slide,
     graphics: Graphics,
-) !void {
-    assert(slides.len > 0);
-    const original = try posix.tcgetattr(in_fd);
-    try setRaw(in_fd, original);
-    defer posix.tcsetattr(in_fd, .NOW, original) catch {};
-    try w.writeAll(enter_alt ++ hide_cursor);
+    watch_enabled: bool,
+};
+
+/// The interactive loop: alt-screen + raw mode, render the current slide, read a
+/// key, apply it, repeat until the speaker quits. Terminal state is always
+/// restored by the defers, including on error.
+fn runInteractive(it: Interactive) !void {
+    assert(it.slides.len > 0);
+    const original = try posix.tcgetattr(it.in_fd);
+    try setRaw(it.in_fd, original);
+    defer posix.tcsetattr(it.in_fd, .NOW, original) catch {};
+    try it.w.writeAll(enter_alt ++ hide_cursor);
     defer {
-        w.writeAll(show_cursor ++ leave_alt) catch {};
-        w.flush() catch {};
+        it.w.writeAll(show_cursor ++ leave_alt) catch {};
+        it.w.flush() catch {};
     }
 
     // Publish the current slide for a `--speaker` companion (best effort).
-    var publisher: ?sync.Publisher = sync.Publisher.init(gpa, io, deck_path) catch null;
+    var publisher: ?sync.Publisher = sync.Publisher.init(it.gpa, it.io, it.deck_path) catch null;
     defer if (publisher) |*p| p.deinit();
+    // Under --watch, reload the deck in place when the file changes (SPEC 2.2).
+    var watcher: ?watch.Watcher = if (it.watch_enabled) watch.Watcher.init(it.io, it.deck_path) else null;
+    var reloaded: ?document.Document = null;
+    defer if (reloaded) |*d| d.deinit();
 
+    var slides = it.slides;
     var show = Presentation.init(slides.len);
-    var frame = std.heap.ArenaAllocator.init(gpa);
+    var frame = std.heap.ArenaAllocator.init(it.gpa);
     defer frame.deinit();
     var key: [8]u8 = undefined;
     while (true) { // interactive loop: bounded only by the quit key
         assert(show.current < slides.len);
         if (publisher) |*p| p.publish(show.current);
         _ = frame.reset(.retain_capacity);
-        try renderSlide(w, frame.allocator(), slides, show.current, terminalSize(out_fd), graphics);
-        try w.flush();
-        const n = posix.read(in_fd, &key) catch 0;
-        if (n == 0) continue;
-        switch (decodeKey(key[0..n])) {
+        try renderSlide(it.w, frame.allocator(), slides, show.current, terminalSize(it.out_fd), it.graphics);
+        try it.w.flush();
+
+        const n = readKey(it.in_fd, &key, watcher != null);
+        if (n > 0) switch (decodeKey(key[0..n])) {
             .next => show.next(),
             .prev => show.prev(),
             .first => show.first(),
             .last => show.last(),
             .quit => return,
             .none => {},
-        }
+        };
+        if (watcher) |*wr| if (wr.changed()) {
+            reload(it, &reloaded, &slides, &show);
+        };
     }
+}
+
+/// Read key bytes. When watching, wait at most one poll interval so the loop
+/// wakes to check the file; otherwise block until a key arrives.
+fn readKey(fd: posix.fd_t, buffer: []u8, watching: bool) usize {
+    if (watching) {
+        var pfd = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+        const ready = posix.poll(&pfd, 200) catch return 0;
+        if (ready == 0 or (pfd[0].revents & posix.POLL.IN) == 0) return 0;
+    }
+    return posix.read(fd, buffer) catch 0;
+}
+
+/// Reload the deck in place, keeping the current position. A load failure or an
+/// empty deck (mid-edit) keeps the previous slides so the session never breaks.
+fn reload(it: Interactive, reloaded: *?document.Document, slides: *[]const Slide, show: *Presentation) void {
+    var next = document.load(it.gpa, it.io, it.base_dir, it.deck_path) catch return;
+    if (next.slides.len == 0) {
+        next.deinit();
+        return;
+    }
+    if (reloaded.*) |*old| old.deinit();
+    reloaded.* = next;
+    slides.* = next.slides;
+    show.count = next.slides.len;
+    if (show.current >= show.count) show.current = show.count - 1;
 }
 
 /// Put `fd` into a cbreak/raw mode: no line buffering, no echo, no signal or

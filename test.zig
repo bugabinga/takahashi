@@ -15,6 +15,7 @@ test {
     _ = @import("src/function.zig");
     _ = @import("src/run.zig");
     _ = @import("src/sync.zig");
+    _ = @import("src/watch.zig");
     _ = @import("src/document.zig");
     _ = @import("src/html.zig");
     _ = @import("src/terminal.zig");

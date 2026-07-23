@@ -88,6 +88,10 @@ zig build run -- examples/demo/demo.taka --to html -o deck.html
 zig build run -- examples/demo/demo.taka --to pdf  -o deck.pdf
 ```
 
+Add **`--watch`** to any form to re-render live as you edit the deck — the
+interactive forms reload in place and keep your position; the file forms
+regenerate their output. Pass **`-`** as the file to read the deck from stdin.
+
 The window and terminal forms are interactive: **→ / Space** advance, **←**
 back, **Home / End** jump, **q / Esc** quit. Speaker notes stay off the
 audience's screen:
