@@ -54,16 +54,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            experimental: false
-          # The macOS window build compiles sokol as Objective-C against the
-          # system SDK and is still being brought up (docs/cross-platform.md),
-          # so it runs but does not fail CI.
-          - os: macos-latest
-            experimental: true
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Zig
