@@ -2,7 +2,8 @@
 # SessionStart hook: provision the toolchain this project builds with.
 #   1. A native, stable Zig (from ziglang.org, never the pip/python package).
 #   2. The system C libraries taka links: OpenGL/X11 for the sokol window form
-#      (SPEC 3.1), and FreeType/HarfBuzz for text.
+#      (SPEC 3.1). Text (stb_truetype) is vendored, so no text library is needed;
+#      the DejaVu + Noto CJK fonts it discovers at runtime are installed instead.
 # taka has no Zig package dependencies, so nothing is fetched via zig; this is
 # all the build needs. Idempotent and quiet on the fast paths.
 set -uo pipefail
@@ -42,6 +43,6 @@ if command -v apt-get >/dev/null 2>&1; then
     apt-get install -y --no-install-recommends \
         libgl1-mesa-dev libx11-dev libxi-dev libxcursor-dev \
         libxrandr-dev libxinerama-dev libxext-dev \
-        libfreetype-dev libharfbuzz-dev \
+        fonts-dejavu-core fonts-noto-cjk \
         >/dev/null 2>&1 || echo "setup: some system libraries failed to install" >&2
 fi

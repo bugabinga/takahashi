@@ -69,7 +69,7 @@ lines
 invisible to the audience, synced to the slide it sits on. A line starting
 with `#` is just a private authoring comment, dropped entirely.
 
-Real fonts, shaped with FreeType + HarfBuzz — so **CJK just works**:
+Real fonts, rasterized with stb_truetype — so **CJK just works**:
 
 ```taka
 高橋メソッド
@@ -107,8 +107,9 @@ audience's screen:
 ## Quick start
 
 taka is built with [Zig 0.16](https://ziglang.org). The window form links a
-few ubiquitous system libraries (OpenGL/X11, FreeType, HarfBuzz); the
-rest is vendored. **No Zig package dependencies — the build fetches nothing.**
+few ubiquitous system libraries for the window and audio (OpenGL/X11 on Linux,
+the platform frameworks on macOS/Windows); text, images, and the rest are
+vendored. **No Zig package dependencies — the build fetches nothing.**
 
 ```sh
 zig build            # build the app
@@ -120,8 +121,8 @@ zig build check      # formatting gate
 ## Under the hood
 
 - **Window** — [sokol](https://github.com/floooh/sokol) (vendored) for the
-  window and immediate-mode rendering; FreeType + HarfBuzz for text, stb_image
-  for pictures, miniaudio for sound.
+  window and immediate-mode rendering; stb_truetype for text, stb_image
+  for pictures, miniaudio for sound (all vendored).
 - **Terminal / HTML / PDF** — pure Zig; the HTML is self-contained (images
   embedded), the PDF is written by hand.
 - Why vendored + system libraries instead of packages?

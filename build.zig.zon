@@ -1,8 +1,8 @@
 // takahashi package manifest.
 //
 // taka has no Zig package dependencies: the window backend (SPEC 3.1) is the
-// vendored sokol single-header C libraries under vendor/, and text uses system
-// libraries (FreeType, HarfBuzz) linked at build time. So the build fetches
+// vendored sokol single-header C libraries under vendor/, and text is the
+// vendored stb_truetype (no system text library). So the build fetches
 // nothing — see docs/window-backend.md for the rationale.
 .{
     .name = .takahashi,

@@ -1,7 +1,7 @@
 //! Window output form (SPEC 3.1): a full-screen presentation via the vendored
-//! sokol libraries. Text is rendered with FreeType + HarfBuzz (proportional,
-//! scaled to fill the frame, CJK-aware), images are laid out in an equal grid
-//! behind the text, and audio plays on entry.
+//! sokol libraries. Text is rendered with the vendored stb_truetype
+//! (proportional, scaled to fill the frame, CJK-aware), images are laid out in
+//! an equal grid behind the text, and audio plays on entry.
 //!
 //! Speaker notes (SPEC 2.1) are not drawn in the window — the audience must
 //! never see them. Instead, when launched from a terminal, the window prints
@@ -83,7 +83,7 @@ pub fn present(
     slides: []const document.Slide,
     watch_enabled: bool,
 ) void {
-    const renderer = text.init(gpa) catch |err| {
+    const renderer = text.init(gpa, io) catch |err| {
         log.err("font init failed: {t}", .{err});
         return;
     };

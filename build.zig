@@ -35,10 +35,9 @@ pub fn build(b: *std.Build) void {
     exe_mod.link_libc = true;
     linkWindowSystem(exe_mod, os);
 
-    // Text (FreeType+HarfBuzz), images (stb_image) and audio (miniaudio) for the
-    // window form. All vendored single-header or system libs; nothing is
-    // fetched. Kept off the test graph so `zig build test` stays offline and
-    // headless.
+    // Text (stb_truetype), images (stb_image) and audio (miniaudio) for the
+    // window form. All vendored single-header libs; nothing is fetched. Kept off
+    // the test graph so `zig build test` stays offline and headless.
     addMedia(b, exe_mod, target, optimize);
 
     b.installArtifact(exe);
@@ -124,9 +123,12 @@ fn linkWindowSystem(mod: *std.Build.Module, os: std.Target.Os.Tag) void {
             mod.linkFramework("AppKit", .{});
         },
         .windows => {
-            // sokol's D3D11 backend loads d3d11.dll/dxgi.dll at runtime, so only
-            // the win32 windowing libraries are linked (matching sokol-zig).
-            for ([_][]const u8{ "kernel32", "user32", "gdi32", "ole32" }) |lib| {
+            // win32 windowing plus the D3D11/DXGI backend libraries. sokol_app
+            // calls D3D11CreateDeviceAndSwapChain directly, so d3d11/dxgi must be
+            // linked (Zig ships the import libs); matches sokol-zig.
+            for ([_][]const u8{
+                "kernel32", "user32", "gdi32", "ole32", "d3d11", "dxgi",
+            }) |lib| {
                 mod.linkSystemLibrary(lib, .{});
             }
         },
@@ -134,37 +136,24 @@ fn linkWindowSystem(mod: *std.Build.Module, os: std.Target.Os.Tag) void {
     }
 }
 
-/// Wire the text/image/audio C dependencies into `mod`. Images (stb_image) are
-/// vendored and portable; text (FreeType + HarfBuzz) and audio (miniaudio) need
-/// per-platform system libraries. See docs/cross-platform.md for the rationale
-/// and the current per-OS verification status.
+/// Wire the text/image/audio C dependencies into `mod`. Text (stb_truetype) and
+/// images (stb_image) are vendored single-header C, portable on every target;
+/// only audio (miniaudio) needs per-platform system libraries. See
+/// docs/cross-platform.md for the rationale and per-OS verification status.
 fn addMedia(b: *std.Build, mod: *std.Build.Module, target: anytype, optimize: anytype) void {
     const os = target.result.os.tag;
+    mod.link_libc = true;
 
-    // text.zig: FreeType + HarfBuzz (system libraries; provisioned per platform,
-    // e.g. apt on Linux, Homebrew on macOS, vcpkg on Windows).
+    // text.zig: vendored stb_truetype — portable C, no system text libraries.
     const text_c = b.addTranslateC(.{
         .root_source_file = b.path("src/text_c.h"),
         .target = target,
         .optimize = optimize,
     });
-    switch (os) {
-        .linux => {
-            text_c.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
-            text_c.addIncludePath(.{ .cwd_relative = "/usr/include/harfbuzz" });
-        },
-        .macos => {
-            // Homebrew (Apple Silicon then Intel prefixes).
-            text_c.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include/freetype2" });
-            text_c.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include/harfbuzz" });
-            text_c.addIncludePath(.{ .cwd_relative = "/usr/local/include/freetype2" });
-            text_c.addIncludePath(.{ .cwd_relative = "/usr/local/include/harfbuzz" });
-        },
-        else => {},
-    }
+    text_c.addIncludePath(b.path("vendor/stb"));
     mod.addImport("text_c", text_c.createModule());
-    mod.linkSystemLibrary("freetype", .{});
-    mod.linkSystemLibrary("harfbuzz", .{});
+    mod.addCSourceFile(.{ .file = b.path("vendor/stb/stb_truetype_impl.c") });
+    mod.addIncludePath(b.path("vendor/stb"));
 
     // image.zig: vendored stb_image — portable C, no system libraries.
     const image_c = b.addTranslateC(.{

@@ -10,16 +10,17 @@ by the platform (see `docs/cross-platform.md`).
   © Andre Weissflog. zlib/libpng license.
 - **stb_image** — image decoding (`vendor/stb/`).
   © Sean Barrett. Dual-licensed: MIT / public domain.
+- **stb_truetype** — font rasterization (`vendor/stb/`).
+  © Sean Barrett. Dual-licensed: MIT / public domain.
 - **miniaudio** — audio playback (`vendor/miniaudio/`).
   © David Reid. Dual-licensed: MIT-0 / public domain.
 
 ## System libraries (linked, not distributed)
 
-- **FreeType** — font rasterization. FreeType License (BSD-style with a credit
-  clause) or GPLv2, at your option.
-- **HarfBuzz** — text shaping. "Old MIT" license.
 - Platform window/graphics/audio libraries (OpenGL/X11, Metal, Direct3D 11,
-  ALSA, CoreAudio, WASAPI) provided by the operating system.
+  ALSA, CoreAudio, WASAPI) provided by the operating system. Text needs no
+  system library — stb_truetype is vendored, and fonts are read from the host's
+  standard font directories at runtime.
 
 ## Runtime tools (not distributed)
 

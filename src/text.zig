@@ -2,12 +2,17 @@
 //! spans into a glyph atlas plus positioned triangle vertices, sized to fill
 //! the frame with padding, aspect ratio preserved.
 //!
-//! FreeType rasterizes glyphs and HarfBuzz shapes each run with the right face;
-//! codepoints the Latin face lacks fall back to the Noto CJK face. The module
-//! returns plain data — an 8-bit coverage atlas and a triangle list in pixel
-//! coordinates — for a caller to upload to the GPU. It never touches the GPU.
+//! The vendored single-header stb_truetype rasterizes glyphs — no system text
+//! libraries (no FreeType, no HarfBuzz). Fonts are discovered from the host's
+//! standard locations at startup (see `candidate_paths`); codepoints the Latin
+//! face lacks fall back to the CJK face via glyph-index lookup. Latin/CJK need
+//! no complex shaping, so a direct codepoint-to-glyph mapping (plus kerning)
+//! stands in for a shaper. The module returns plain data — an 8-bit coverage
+//! atlas and a triangle list in pixel coordinates — for a caller to upload to
+//! the GPU. It never touches the GPU.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const markup = @import("markup.zig");
@@ -32,27 +37,24 @@ const face_oblique: u8 = 2;
 const face_cjk: u8 = 3;
 const face_count: usize = 4;
 
+// Which owned font buffer backs each face. The oblique face reuses the regular
+// buffer and is slanted synthetically at emit time, keeping italic advances and
+// coverage identical to the upright family.
+const face_data = [face_count]u8{ 0, 1, 0, 2 };
+const data_count: usize = 3;
+const data_regular: u8 = 0;
+const data_bold: u8 = 1;
+const data_cjk: u8 = 2;
+
 const px_min: u32 = 8;
 const px_max: u32 = 400;
 const atlas_w_min: u32 = 1024;
 
-// DejaVu ships no proportional oblique here (confirmed with fc-match), so the
-// oblique slot loads a second DejaVuSans instance and shears it — keeping the
-// italic's coverage and advances identical to the upright family.
-const font_paths = [face_count][:0]const u8{
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-};
+// A ~11.5-degree slant applied to oblique glyphs as a horizontal shear of the
+// emitted quad (0.2 matches the old FreeType FT_Matrix shear of 0.2 * 2^16).
+const oblique_shear: f32 = 0.2;
 
-// A ~11.5-degree slant (0.2 * 2^16) applied to the oblique face's outlines.
-const oblique_shear: c_long = 13107;
-
-const Face = struct {
-    ft_face: c.FT_Face,
-    hb_font: *c.hb_font_t,
-};
+const FontRole = enum { regular, bold, cjk };
 
 /// A shaping run: contiguous bytes of a single font face (no spaces/newlines).
 const Sub = struct { face_index: u8, bytes: []const u8 };
@@ -64,8 +66,6 @@ const Glyph = struct {
     face_index: u8,
     glyph_index: u32,
     pen_x: f32,
-    x_off: f32,
-    y_off: f32,
 };
 const ShapedWord = struct { glyphs: []const Glyph, width: f32 };
 const Item = union(enum) { word: usize, newline };
@@ -88,50 +88,127 @@ const RasterGlyph = struct {
 };
 
 pub const Renderer = struct {
-    ft: c.FT_Library,
-    faces: [face_count]Face,
+    /// Owned font byte buffers (regular, bold, CJK); the fontinfos point into
+    /// these, so they live as long as the renderer.
+    data: [data_count][]u8,
+    faces: [face_count]c.stbtt_fontinfo,
+    /// The pixel size the fit search is currently probing (stb is stateless, so
+    /// scale is derived per call from this).
+    px: u32,
 };
 
-/// Load the DejaVu Sans regular/bold/oblique faces and the Noto CJK fallback.
-pub fn init(gpa: Allocator) !Renderer {
-    _ = gpa;
-    var ft: c.FT_Library = undefined;
-    if (c.FT_Init_FreeType(&ft) != 0) return error.FreeTypeInit;
-    assert(ft != null);
-    var faces: [face_count]Face = undefined;
-    var loaded: usize = 0;
-    errdefer cleanup(ft, faces[0..loaded]);
-    while (loaded < face_count) : (loaded += 1) {
-        var face: c.FT_Face = undefined;
-        if (c.FT_New_Face(ft, font_paths[loaded].ptr, 0, &face) != 0) {
-            return error.FontLoad;
-        }
-        if (loaded == face_oblique) {
-            var m: c.FT_Matrix = .{ .xx = 0x10000, .xy = oblique_shear, .yx = 0, .yy = 0x10000 };
-            c.FT_Set_Transform(face, &m, null);
-        }
-        const hb = c.hb_ft_font_create_referenced(face) orelse return error.HbFont;
-        faces[loaded] = .{ .ft_face = face, .hb_font = hb };
-    }
-    assert(loaded == face_count);
-    return .{ .ft = ft, .faces = faces };
+/// Standard on-disk font locations per host OS, tried in order. Every desktop
+/// platform ships a Latin sans, a bold companion, and a pan-CJK face, so no
+/// large font asset is committed to the repository.
+fn candidate_paths(comptime role: FontRole) []const []const u8 {
+    return switch (builtin.os.tag) {
+        .linux => switch (role) {
+            .regular => &.{
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+            },
+            .bold => &.{
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+            },
+            .cjk => &.{
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            },
+        },
+        .macos => switch (role) {
+            .regular => &.{
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/System/Library/Fonts/HelveticaNeue.ttc",
+                "/System/Library/Fonts/Supplemental/Arial.ttf",
+                "/Library/Fonts/Arial.ttf",
+            },
+            .bold => &.{
+                "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+                "/Library/Fonts/Arial Bold.ttf",
+                "/System/Library/Fonts/Helvetica.ttc",
+            },
+            .cjk => &.{
+                "/System/Library/Fonts/PingFang.ttc",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/Library/Fonts/Arial Unicode.ttf",
+            },
+        },
+        .windows => switch (role) {
+            .regular => &.{
+                "C:/Windows/Fonts/arial.ttf",
+                "C:/Windows/Fonts/segoeui.ttf",
+                "C:/Windows/Fonts/tahoma.ttf",
+            },
+            .bold => &.{
+                "C:/Windows/Fonts/arialbd.ttf",
+                "C:/Windows/Fonts/segoeuib.ttf",
+                "C:/Windows/Fonts/tahomabd.ttf",
+            },
+            .cjk => &.{
+                "C:/Windows/Fonts/msyh.ttc",
+                "C:/Windows/Fonts/msgothic.ttc",
+                "C:/Windows/Fonts/malgun.ttf",
+                "C:/Windows/Fonts/simsun.ttc",
+            },
+        },
+        else => switch (role) {
+            .regular, .bold, .cjk => &.{},
+        },
+    };
 }
 
-fn cleanup(ft: c.FT_Library, faces: []Face) void {
-    assert(ft != null);
-    assert(faces.len <= face_count);
-    for (faces) |f| {
-        c.hb_font_destroy(f.hb_font);
-        _ = c.FT_Done_Face(f.ft_face);
+/// Read the first existing font for `role` into a gpa-owned buffer.
+fn loadFont(gpa: Allocator, io: std.Io, comptime role: FontRole) ![]u8 {
+    const paths = candidate_paths(role);
+    assert(paths.len > 0);
+    for (paths) |path| {
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch continue;
+        assert(bytes.len > 0);
+        return bytes;
     }
-    _ = c.FT_Done_FreeType(ft);
+    return error.FontNotFound;
+}
+
+/// Initialize a fontinfo over `data`, selecting the first face of a collection.
+fn initFace(info: *c.stbtt_fontinfo, data: []const u8) !void {
+    assert(data.len > 0);
+    const offset = c.stbtt_GetFontOffsetForIndex(data.ptr, 0);
+    if (offset < 0) return error.FontParse;
+    if (c.stbtt_InitFont(info, data.ptr, offset) == 0) return error.FontParse;
+}
+
+/// Discover and load the regular/bold/CJK faces; the oblique face reuses the
+/// regular buffer and is slanted at emit time.
+pub fn init(gpa: Allocator, io: std.Io) !Renderer {
+    var self: Renderer = .{ .data = undefined, .faces = undefined, .px = px_min };
+    var loaded: usize = 0;
+    errdefer for (0..loaded) |i| gpa.free(self.data[i]);
+    self.data[data_regular] = try loadFont(gpa, io, .regular);
+    loaded = 1;
+    self.data[data_bold] = try loadFont(gpa, io, .bold);
+    loaded = 2;
+    self.data[data_cjk] = try loadFont(gpa, io, .cjk);
+    loaded = 3;
+    assert(loaded == data_count);
+    for (0..face_count) |i| try initFace(&self.faces[i], self.data[face_data[i]]);
+    return self;
 }
 
 pub fn deinit(self: *Renderer, gpa: Allocator) void {
-    _ = gpa;
-    assert(self.ft != null);
-    assert(self.faces.len == face_count);
-    cleanup(self.ft, self.faces[0..]);
+    assert(self.data.len == data_count);
+    for (self.data) |buf| {
+        assert(buf.len > 0);
+        gpa.free(buf);
+    }
     self.* = undefined;
 }
 
@@ -152,13 +229,11 @@ pub fn layoutFit(
     const avail_h = frame_h - 2 * padding;
     assert(avail_w > 0);
     assert(avail_h > 0);
-    const buf = c.hb_buffer_create() orelse return error.HbBuffer;
-    defer c.hb_buffer_destroy(buf);
     const tokens = try tokenize(self, arena, spans);
     if (tokens.len == 0) return emptyLayout();
-    const best = searchSize(self, buf, tokens, avail_w, avail_h);
+    const best = searchSize(self, tokens, avail_w, avail_h);
     setPixelSize(self, best);
-    return compose(self, arena, buf, tokens, best, frame_w, frame_h, avail_w);
+    return compose(self, arena, tokens, best, frame_w, frame_h, avail_w);
 }
 
 fn emptyLayout() Layout {
@@ -166,25 +241,29 @@ fn emptyLayout() Layout {
     return .{ .atlas = one, .atlas_w = 1, .atlas_h = 1, .vertices = &.{}, .used_px = px_min };
 }
 
+/// The pixel-to-font scale of `face_index` at the current probe size.
+fn scaleFor(self: *Renderer, face_index: u8) f32 {
+    assert(face_index < face_count);
+    assert(self.px >= px_min);
+    const s = c.stbtt_ScaleForPixelHeight(&self.faces[face_index], @floatFromInt(self.px));
+    assert(s > 0);
+    return s;
+}
+
 fn faceForCodepoint(self: *Renderer, style: markup.Style, cp: u21) u8 {
     assert(self.faces.len == face_count);
     var base: u8 = face_regular;
     if (style.bold) base = face_bold else if (style.italic) base = face_oblique;
     assert(base < face_count);
-    if (c.FT_Get_Char_Index(self.faces[base].ft_face, cp) != 0) return base;
-    if (c.FT_Get_Char_Index(self.faces[face_cjk].ft_face, cp) != 0) return face_cjk;
+    if (c.stbtt_FindGlyphIndex(&self.faces[base], @intCast(cp)) != 0) return base;
+    if (c.stbtt_FindGlyphIndex(&self.faces[face_cjk], @intCast(cp)) != 0) return face_cjk;
     return base;
 }
 
 fn setPixelSize(self: *Renderer, px: u32) void {
     assert(px >= px_min);
     assert(px <= px_max);
-    var i: usize = 0;
-    while (i < face_count) : (i += 1) {
-        const e = c.FT_Set_Pixel_Sizes(self.faces[i].ft_face, 0, @intCast(px));
-        assert(e == 0);
-        c.hb_ft_font_changed(self.faces[i].hb_font);
-    }
+    self.px = px;
 }
 
 const Tokenizer = struct {
@@ -283,94 +362,102 @@ fn tokenize(self: *Renderer, arena: Allocator, spans: []const markup.Span) ![]co
     return t.tokens.toOwnedSlice(arena);
 }
 
-/// Shape one sub at the current pixel size; return its advance width in pixels,
-/// appending positioned glyphs to `out` when it is non-null.
+/// Map one sub's codepoints to glyphs at the current size; return its advance
+/// width in pixels, appending positioned glyphs to `out` when it is non-null.
 fn shapeSub(
     self: *Renderer,
     arena: Allocator,
-    buf: *c.hb_buffer_t,
     sub: Sub,
     base_pen: f32,
     out: ?*std.ArrayList(Glyph),
 ) !f32 {
     assert(sub.bytes.len > 0);
     assert(sub.face_index < face_count);
-    const font = self.faces[sub.face_index].hb_font;
-    c.hb_buffer_reset(buf);
-    c.hb_buffer_add_utf8(buf, sub.bytes.ptr, @intCast(sub.bytes.len), 0, @intCast(sub.bytes.len));
-    c.hb_buffer_guess_segment_properties(buf);
-    c.hb_shape(font, buf, null, 0);
-    var n: c_uint = 0;
-    const infos = c.hb_buffer_get_glyph_infos(buf, &n);
-    const pos = c.hb_buffer_get_glyph_positions(buf, &n);
+    const info = &self.faces[sub.face_index];
+    const scale = scaleFor(self, sub.face_index);
     var pen: f32 = 0;
-    var k: usize = 0;
-    while (k < n) : (k += 1) {
+    var prev: c_int = 0;
+    var have_prev = false;
+    var i: usize = 0;
+    while (i < sub.bytes.len) {
+        const len = std.unicode.utf8ByteSequenceLength(sub.bytes[i]) catch 1;
+        const end = @min(i + len, sub.bytes.len);
+        const cp = std.unicode.utf8Decode(sub.bytes[i..end]) catch @as(u21, sub.bytes[i]);
+        const glyph = c.stbtt_FindGlyphIndex(info, @intCast(cp));
+        if (have_prev) pen += @as(f32, @floatFromInt(c.stbtt_GetGlyphKernAdvance(info, prev, glyph))) * scale;
         if (out) |o| try o.append(arena, .{
             .face_index = sub.face_index,
-            .glyph_index = infos[k].codepoint,
+            .glyph_index = @intCast(glyph),
             .pen_x = base_pen + pen,
-            .x_off = @as(f32, @floatFromInt(pos[k].x_offset)) / 64.0,
-            .y_off = @as(f32, @floatFromInt(pos[k].y_offset)) / 64.0,
         });
-        pen += @as(f32, @floatFromInt(pos[k].x_advance)) / 64.0;
+        var adv: c_int = 0;
+        var lsb: c_int = 0;
+        c.stbtt_GetGlyphHMetrics(info, glyph, &adv, &lsb);
+        pen += @as(f32, @floatFromInt(adv)) * scale;
+        prev = glyph;
+        have_prev = true;
+        i = end;
     }
     assert(pen >= 0);
     return pen;
 }
 
-fn wordWidth(self: *Renderer, buf: *c.hb_buffer_t, word: Word) !f32 {
+fn wordWidth(self: *Renderer, word: Word) !f32 {
     assert(word.subs.len > 0);
     var width: f32 = 0;
-    for (word.subs) |sub| width += try shapeSub(self, undefined, buf, sub, width, null);
+    for (word.subs) |sub| width += try shapeSub(self, undefined, sub, width, null);
     assert(width >= 0);
     return width;
 }
 
-fn shapeWord(self: *Renderer, arena: Allocator, buf: *c.hb_buffer_t, word: Word) !ShapedWord {
+fn shapeWord(self: *Renderer, arena: Allocator, word: Word) !ShapedWord {
     assert(word.subs.len > 0);
     var glyphs: std.ArrayList(Glyph) = .empty;
     var width: f32 = 0;
-    for (word.subs) |sub| width += try shapeSub(self, arena, buf, sub, width, &glyphs);
+    for (word.subs) |sub| width += try shapeSub(self, arena, sub, width, &glyphs);
     assert(width >= 0);
     return .{ .glyphs = try glyphs.toOwnedSlice(arena), .width = width };
 }
 
-fn spaceWidth(self: *Renderer, buf: *c.hb_buffer_t) f32 {
+fn spaceWidth(self: *Renderer) f32 {
     const sub: Sub = .{ .face_index = face_regular, .bytes = " " };
-    const w = shapeSub(self, undefined, buf, sub, 0, null) catch unreachable;
+    const w = shapeSub(self, undefined, sub, 0, null) catch unreachable;
     assert(w >= 0);
     assert(self.faces.len == face_count);
     return w;
 }
 
 fn lineHeightPx(self: *Renderer) f32 {
-    const m = self.faces[face_regular].ft_face.*.size.*.metrics;
-    const h = @as(f32, @floatFromInt(m.height)) / 64.0;
+    var ascent: c_int = 0;
+    var descent: c_int = 0;
+    var line_gap: c_int = 0;
+    c.stbtt_GetFontVMetrics(&self.faces[face_regular], &ascent, &descent, &line_gap);
+    const units: f32 = @floatFromInt(ascent - descent + line_gap);
+    const h = units * scaleFor(self, face_regular);
     assert(h > 0);
-    assert(self.faces.len == face_count);
     return h;
 }
 
 fn ascentPx(self: *Renderer) f32 {
-    const m = self.faces[face_regular].ft_face.*.size.*.metrics;
-    const a = @as(f32, @floatFromInt(m.ascender)) / 64.0;
+    var ascent: c_int = 0;
+    var descent: c_int = 0;
+    var line_gap: c_int = 0;
+    c.stbtt_GetFontVMetrics(&self.faces[face_regular], &ascent, &descent, &line_gap);
+    const a = @as(f32, @floatFromInt(ascent)) * scaleFor(self, face_regular);
     assert(a > 0);
-    assert(self.faces.len == face_count);
     return a;
 }
 
 /// Greedy word wrap at the current size; true when the block fits the frame.
 fn fits(
     self: *Renderer,
-    buf: *c.hb_buffer_t,
     tokens: []const Token,
     avail_w: f32,
     avail_h: f32,
 ) !bool {
     assert(avail_w > 0);
     assert(avail_h > 0);
-    const space_w = spaceWidth(self, buf);
+    const space_w = spaceWidth(self);
     const line_h = lineHeightPx(self);
     var lines: u32 = 1;
     var cur: f32 = 0;
@@ -380,7 +467,7 @@ fn fits(
             cur = 0;
         },
         .word => |w| {
-            const ww = try wordWidth(self, buf, w);
+            const ww = try wordWidth(self, w);
             if (ww > avail_w) return false;
             if (cur == 0) {
                 cur = ww;
@@ -395,7 +482,6 @@ fn fits(
 
 fn searchSize(
     self: *Renderer,
-    buf: *c.hb_buffer_t,
     tokens: []const Token,
     avail_w: f32,
     avail_h: f32,
@@ -408,7 +494,7 @@ fn searchSize(
     while (lo <= hi) {
         const mid = lo + (hi - lo) / 2;
         setPixelSize(self, mid);
-        const ok = fits(self, buf, tokens, avail_w, avail_h) catch false;
+        const ok = fits(self, tokens, avail_w, avail_h) catch false;
         if (ok) {
             best = mid;
             lo = mid + 1;
@@ -425,7 +511,6 @@ fn searchSize(
 fn compose(
     self: *Renderer,
     arena: Allocator,
-    buf: *c.hb_buffer_t,
     tokens: []const Token,
     best: u32,
     frame_w: f32,
@@ -434,13 +519,13 @@ fn compose(
 ) !Layout {
     assert(tokens.len > 0);
     assert(best >= px_min);
-    const space_w = spaceWidth(self, buf);
+    const space_w = spaceWidth(self);
     var words: std.ArrayList(ShapedWord) = .empty;
     var items: std.ArrayList(Item) = .empty;
     for (tokens) |tok| switch (tok) {
         .newline => try items.append(arena, .newline),
         .word => |w| {
-            try words.append(arena, try shapeWord(self, arena, buf, w));
+            try words.append(arena, try shapeWord(self, arena, w));
             try items.append(arena, .{ .word = words.items.len - 1 });
         },
     };
@@ -523,8 +608,8 @@ fn placeGlyphs(
         for (words[p.word_index].glyphs) |g| try placed.append(arena, .{
             .face_index = g.face_index,
             .glyph_index = g.glyph_index,
-            .pen_x = line_x + p.x_start + g.pen_x + g.x_off,
-            .baseline_y = baseline - g.y_off,
+            .pen_x = line_x + p.x_start + g.pen_x,
+            .baseline_y = baseline,
         });
     }
     return placed.toOwnedSlice(arena);
@@ -532,35 +617,36 @@ fn placeGlyphs(
 
 fn rasterize(self: *Renderer, arena: Allocator, face_index: u8, glyph_index: u32) !RasterGlyph {
     assert(face_index < face_count);
-    const face = self.faces[face_index].ft_face;
-    if (c.FT_Load_Glyph(face, @intCast(glyph_index), c.FT_LOAD_RENDER) != 0) {
-        return error.GlyphLoad;
-    }
-    const slot = face.*.glyph;
-    const bm = slot.*.bitmap;
-    const w: u32 = @intCast(bm.width);
-    const h: u32 = @intCast(bm.rows);
-    const pitch: i32 = bm.pitch;
-    assert(pitch >= 0);
+    const scale = scaleFor(self, face_index);
+    var w: c_int = 0;
+    var h: c_int = 0;
+    var xoff: c_int = 0;
+    var yoff: c_int = 0;
+    const bmp = c.stbtt_GetGlyphBitmap(
+        &self.faces[face_index],
+        scale,
+        scale,
+        @intCast(glyph_index),
+        &w,
+        &h,
+        &xoff,
+        &yoff,
+    );
+    defer if (bmp != null) c.stbtt_FreeBitmap(bmp, null);
+    assert(w >= 0);
+    assert(h >= 0);
+    const uw: u32 = @intCast(w);
+    const uh: u32 = @intCast(h);
     var pixels: []const u8 = &.{};
-    if (w > 0 and h > 0) {
-        const buffer = try arena.alloc(u8, w * h);
-        var r: u32 = 0;
-        while (r < h) : (r += 1) {
-            const src = bm.buffer + @as(usize, r) * @as(usize, @intCast(pitch));
-            @memcpy(buffer[r * w .. r * w + w], src[0..w]);
-        }
+    if (uw > 0 and uh > 0) {
+        assert(bmp != null);
+        const buffer = try arena.alloc(u8, uw * uh);
+        @memcpy(buffer, bmp[0 .. uw * uh]);
         pixels = buffer;
     }
-    return .{
-        .w = w,
-        .h = h,
-        .left = slot.*.bitmap_left,
-        .top = slot.*.bitmap_top,
-        .pixels = pixels,
-        .x = 0,
-        .y = 0,
-    };
+    // stb yoff is the downward offset from the baseline to the bitmap top; the
+    // atlas/vertex code wants top as an upward distance, so negate.
+    return .{ .w = uw, .h = uh, .left = xoff, .top = -yoff, .pixels = pixels, .x = 0, .y = 0 };
 }
 
 fn packAtlas(rasters: []RasterGlyph, atlas_w: u32) u32 {
@@ -634,6 +720,14 @@ fn keyOf(face_index: u8, glyph_index: u32) u64 {
     return key;
 }
 
+/// Horizontal shear for a vertex of a glyph on `face_index`: oblique glyphs
+/// slant so points above the baseline move right, points below move left.
+fn shearX(face_index: u8, x: f32, y: f32, baseline_y: f32) f32 {
+    assert(face_index < face_count);
+    if (face_index != face_oblique) return x;
+    return x + oblique_shear * (baseline_y - y);
+}
+
 fn emitVertices(
     arena: Allocator,
     placed: []const PlacedGlyph,
@@ -654,18 +748,28 @@ fn emitVertices(
         const y0 = pg.baseline_y - @as(f32, @floatFromInt(rg.top));
         const x1 = x0 + @as(f32, @floatFromInt(rg.w));
         const y1 = y0 + @as(f32, @floatFromInt(rg.h));
+        const sx0y0 = shearX(pg.face_index, x0, y0, pg.baseline_y);
+        const sx1y0 = shearX(pg.face_index, x1, y0, pg.baseline_y);
+        const sx0y1 = shearX(pg.face_index, x0, y1, pg.baseline_y);
+        const sx1y1 = shearX(pg.face_index, x1, y1, pg.baseline_y);
         const au0 = @as(f32, @floatFromInt(rg.x)) / fw;
         const av0 = @as(f32, @floatFromInt(rg.y)) / fh;
         const au1 = @as(f32, @floatFromInt(rg.x + rg.w)) / fw;
         const av1 = @as(f32, @floatFromInt(rg.y + rg.h)) / fh;
-        try verts.append(arena, .{ .x = x0, .y = y0, .u = au0, .v = av0 });
-        try verts.append(arena, .{ .x = x1, .y = y0, .u = au1, .v = av0 });
-        try verts.append(arena, .{ .x = x0, .y = y1, .u = au0, .v = av1 });
-        try verts.append(arena, .{ .x = x1, .y = y0, .u = au1, .v = av0 });
-        try verts.append(arena, .{ .x = x1, .y = y1, .u = au1, .v = av1 });
-        try verts.append(arena, .{ .x = x0, .y = y1, .u = au0, .v = av1 });
+        try verts.append(arena, .{ .x = sx0y0, .y = y0, .u = au0, .v = av0 });
+        try verts.append(arena, .{ .x = sx1y0, .y = y0, .u = au1, .v = av0 });
+        try verts.append(arena, .{ .x = sx0y1, .y = y1, .u = au0, .v = av1 });
+        try verts.append(arena, .{ .x = sx1y0, .y = y0, .u = au1, .v = av0 });
+        try verts.append(arena, .{ .x = sx1y1, .y = y1, .u = au1, .v = av1 });
+        try verts.append(arena, .{ .x = sx0y1, .y = y1, .u = au0, .v = av1 });
     }
     return verts.toOwnedSlice(arena);
+}
+
+fn testRenderer() !Renderer {
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    return init(std.testing.allocator, threaded.io());
 }
 
 fn testSpans(comptime one: []const u8, comptime two: []const u8) [2]markup.Span {
@@ -680,7 +784,7 @@ test "layoutFit produces an atlas and centered vertices for latin text" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var renderer = try init(std.testing.allocator);
+    var renderer = try testRenderer();
     defer deinit(&renderer, std.testing.allocator);
 
     const spans = testSpans("Hello ", "bold");
@@ -699,7 +803,7 @@ test "layoutFit shapes CJK text via the Noto fallback face" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var renderer = try init(std.testing.allocator);
+    var renderer = try testRenderer();
     defer deinit(&renderer, std.testing.allocator);
 
     const spans = [_]markup.Span{.{ .text = "こんにちは", .style = .{} }};

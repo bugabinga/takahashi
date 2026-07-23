@@ -17,11 +17,64 @@ const assert = std.debug.assert;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
-// Raw-mode presentation uses POSIX termios/ioctl, which do not exist on Windows
-// (a Console-API path is future work; see docs/cross-platform.md). On Windows
-// `present` falls back to the non-interactive dump, and the POSIX-only helpers
-// compile to no-ops so the module still builds there.
+// Raw-mode presentation uses POSIX termios/ioctl; Windows uses the Console API
+// (GetConsoleMode/SetConsoleMode with the virtual-terminal flags). Both paths
+// take over the alternate screen and drive the same key decoder. The platform
+// split is comptime, so each host only analyzes its own branch.
 const is_posix = builtin.os.tag != .windows;
+
+/// Minimal Win32 Console bindings (std does not wrap these). Only referenced on
+/// Windows, so the externs are neither analyzed nor linked on POSIX hosts.
+const win = struct {
+    const HANDLE = std.os.windows.HANDLE;
+    // WINAPI BOOL is a plain `int`; use c_int so results compare against 0.
+    const BOOL = c_int;
+    const DWORD = std.os.windows.DWORD;
+    const WORD = std.os.windows.WORD;
+    const SHORT = std.os.windows.SHORT;
+
+    const ENABLE_PROCESSED_INPUT: DWORD = 0x0001;
+    const ENABLE_LINE_INPUT: DWORD = 0x0002;
+    const ENABLE_ECHO_INPUT: DWORD = 0x0004;
+    const ENABLE_WINDOW_INPUT: DWORD = 0x0008;
+    const ENABLE_MOUSE_INPUT: DWORD = 0x0010;
+    const ENABLE_QUICK_EDIT_MODE: DWORD = 0x0040;
+    const ENABLE_EXTENDED_FLAGS: DWORD = 0x0080;
+    const ENABLE_VIRTUAL_TERMINAL_INPUT: DWORD = 0x0200;
+    const ENABLE_PROCESSED_OUTPUT: DWORD = 0x0001;
+    const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = 0x0004;
+    const WAIT_OBJECT_0: DWORD = 0x0;
+
+    const COORD = extern struct { X: SHORT, Y: SHORT };
+    const SMALL_RECT = extern struct { Left: SHORT, Top: SHORT, Right: SHORT, Bottom: SHORT };
+    const CONSOLE_SCREEN_BUFFER_INFO = extern struct {
+        dwSize: COORD,
+        dwCursorPosition: COORD,
+        wAttributes: WORD,
+        srWindow: SMALL_RECT,
+        dwMaximumWindowSize: COORD,
+    };
+
+    extern "kernel32" fn GetConsoleMode(handle: HANDLE, mode: *DWORD) callconv(.winapi) BOOL;
+    extern "kernel32" fn SetConsoleMode(handle: HANDLE, mode: DWORD) callconv(.winapi) BOOL;
+    extern "kernel32" fn GetConsoleScreenBufferInfo(
+        handle: HANDLE,
+        info: *CONSOLE_SCREEN_BUFFER_INFO,
+    ) callconv(.winapi) BOOL;
+    extern "kernel32" fn WaitForSingleObject(handle: HANDLE, ms: DWORD) callconv(.winapi) DWORD;
+    extern "kernel32" fn ReadFile(
+        handle: HANDLE,
+        buffer: [*]u8,
+        len: DWORD,
+        read: *DWORD,
+        overlapped: ?*anyopaque,
+    ) callconv(.winapi) BOOL;
+};
+
+/// Saved terminal state to restore on exit: the termios on POSIX, the pair of
+/// console modes on Windows.
+const WindowsModes = struct { in_mode: u32, out_mode: u32 };
+const TermState = if (is_posix) posix.termios else WindowsModes;
 
 const document = @import("document.zig");
 const Presentation = @import("presentation.zig").Presentation;
@@ -64,7 +117,7 @@ pub fn present(
 
     const in_tty = stdin.isTty(io) catch false;
     const out_tty = stdout.isTty(io) catch false;
-    if (!is_posix or !in_tty or !out_tty or slides.len == 0) {
+    if (!in_tty or !out_tty or slides.len == 0) {
         try renderDump(w, slides, graphics);
         try w.flush();
         return;
@@ -100,59 +153,88 @@ const Interactive = struct {
 /// key, apply it, repeat until the speaker quits. Terminal state is always
 /// restored by the defers, including on error.
 fn runInteractive(it: Interactive) !void {
-    // The whole raw-mode loop is POSIX-only; on Windows the block is
-    // comptime-eliminated, so this compiles to a no-op (and is never reached —
-    // `present` routes Windows to the dump).
+    assert(it.slides.len > 0);
+    const original = try enterRaw(it.in_fd, it.out_fd);
+    defer restoreRaw(it.in_fd, it.out_fd, original);
+    try it.w.writeAll(enter_alt ++ hide_cursor);
+    defer {
+        it.w.writeAll(show_cursor ++ leave_alt) catch {};
+        it.w.flush() catch {};
+    }
+
+    // Publish the current slide for a `--speaker` companion (best effort).
+    var publisher: ?sync.Publisher = sync.Publisher.init(it.gpa, it.io, it.deck_path) catch null;
+    defer if (publisher) |*p| p.deinit();
+    // Under --watch, reload the deck in place when the file changes (SPEC 2.2).
+    var watcher: ?watch.Watcher = if (it.watch_enabled) watch.Watcher.init(it.io, it.deck_path) else null;
+    var reloaded: ?document.Document = null;
+    defer if (reloaded) |*d| d.deinit();
+
+    var slides = it.slides;
+    var show = Presentation.init(slides.len);
+    var frame = std.heap.ArenaAllocator.init(it.gpa);
+    defer frame.deinit();
+    var key: [8]u8 = undefined;
+    while (true) { // interactive loop: bounded only by the quit key
+        assert(show.current < slides.len);
+        if (publisher) |*p| p.publish(show.current);
+        _ = frame.reset(.retain_capacity);
+        try renderSlide(it.w, frame.allocator(), slides, show.current, terminalSize(it.out_fd), it.graphics);
+        try it.w.flush();
+
+        const n = readKey(it.in_fd, &key, watcher != null);
+        if (n > 0) switch (decodeKey(key[0..n])) {
+            .next => show.next(),
+            .prev => show.prev(),
+            .first => show.first(),
+            .last => show.last(),
+            .quit => return,
+            .none => {},
+        };
+        if (watcher) |*wr| if (wr.changed()) {
+            reload(it, &reloaded, &slides, &show);
+        };
+    }
+}
+
+/// Save the terminal state and switch to raw/VT mode. POSIX flips termios;
+/// Windows clears line/echo/mouse input and enables virtual-terminal handling
+/// on both console handles so ANSI escapes and arrow-key sequences work.
+fn enterRaw(in_fd: posix.fd_t, out_fd: posix.fd_t) !TermState {
     if (is_posix) {
-        assert(it.slides.len > 0);
-        const original = try posix.tcgetattr(it.in_fd);
-        try setRaw(it.in_fd, original);
-        defer posix.tcsetattr(it.in_fd, .NOW, original) catch {};
-        try it.w.writeAll(enter_alt ++ hide_cursor);
-        defer {
-            it.w.writeAll(show_cursor ++ leave_alt) catch {};
-            it.w.flush() catch {};
-        }
+        const original = try posix.tcgetattr(in_fd);
+        try setRaw(in_fd, original);
+        return original;
+    } else {
+        var saved: WindowsModes = .{ .in_mode = 0, .out_mode = 0 };
+        if (win.GetConsoleMode(in_fd, &saved.in_mode) == 0) return error.NotATerminal;
+        if (win.GetConsoleMode(out_fd, &saved.out_mode) == 0) return error.NotATerminal;
+        const raw_in = (saved.in_mode & ~(win.ENABLE_ECHO_INPUT | win.ENABLE_LINE_INPUT |
+            win.ENABLE_PROCESSED_INPUT | win.ENABLE_MOUSE_INPUT | win.ENABLE_WINDOW_INPUT |
+            win.ENABLE_QUICK_EDIT_MODE)) | win.ENABLE_VIRTUAL_TERMINAL_INPUT | win.ENABLE_EXTENDED_FLAGS;
+        const raw_out = saved.out_mode | win.ENABLE_PROCESSED_OUTPUT |
+            win.ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        if (win.SetConsoleMode(in_fd, raw_in) == 0) return error.NotATerminal;
+        if (win.SetConsoleMode(out_fd, raw_out) == 0) return error.NotATerminal;
+        return saved;
+    }
+}
 
-        // Publish the current slide for a `--speaker` companion (best effort).
-        var publisher: ?sync.Publisher = sync.Publisher.init(it.gpa, it.io, it.deck_path) catch null;
-        defer if (publisher) |*p| p.deinit();
-        // Under --watch, reload the deck in place when the file changes (SPEC 2.2).
-        var watcher: ?watch.Watcher = if (it.watch_enabled) watch.Watcher.init(it.io, it.deck_path) else null;
-        var reloaded: ?document.Document = null;
-        defer if (reloaded) |*d| d.deinit();
-
-        var slides = it.slides;
-        var show = Presentation.init(slides.len);
-        var frame = std.heap.ArenaAllocator.init(it.gpa);
-        defer frame.deinit();
-        var key: [8]u8 = undefined;
-        while (true) { // interactive loop: bounded only by the quit key
-            assert(show.current < slides.len);
-            if (publisher) |*p| p.publish(show.current);
-            _ = frame.reset(.retain_capacity);
-            try renderSlide(it.w, frame.allocator(), slides, show.current, terminalSize(it.out_fd), it.graphics);
-            try it.w.flush();
-
-            const n = readKey(it.in_fd, &key, watcher != null);
-            if (n > 0) switch (decodeKey(key[0..n])) {
-                .next => show.next(),
-                .prev => show.prev(),
-                .first => show.first(),
-                .last => show.last(),
-                .quit => return,
-                .none => {},
-            };
-            if (watcher) |*wr| if (wr.changed()) {
-                reload(it, &reloaded, &slides, &show);
-            };
-        }
+/// Restore the terminal to the state `enterRaw` saved. Best effort — failures
+/// on the way out are ignored so a clean quit path is guaranteed.
+fn restoreRaw(in_fd: posix.fd_t, out_fd: posix.fd_t, saved: TermState) void {
+    if (is_posix) {
+        posix.tcsetattr(in_fd, .NOW, saved) catch {};
+    } else {
+        _ = win.SetConsoleMode(in_fd, saved.in_mode);
+        _ = win.SetConsoleMode(out_fd, saved.out_mode);
     }
 }
 
 /// Read key bytes. When watching, wait at most one poll interval so the loop
 /// wakes to check the file; otherwise block until a key arrives.
 fn readKey(fd: posix.fd_t, buffer: []u8, watching: bool) usize {
+    assert(buffer.len > 0);
     if (is_posix) {
         if (watching) {
             var pfd = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
@@ -160,8 +242,14 @@ fn readKey(fd: posix.fd_t, buffer: []u8, watching: bool) usize {
             if (ready == 0 or (pfd[0].revents & posix.POLL.IN) == 0) return 0;
         }
         return posix.read(fd, buffer) catch 0;
+    } else {
+        // Raw mode cleared mouse/window events, so the input handle signals only
+        // on key input; a timed wait lets --watch poll the file between keys.
+        if (watching and win.WaitForSingleObject(fd, 200) != win.WAIT_OBJECT_0) return 0;
+        var read: u32 = 0;
+        if (win.ReadFile(fd, buffer.ptr, @intCast(buffer.len), &read, null) == 0) return 0;
+        return read;
     }
-    return 0;
 }
 
 /// Reload the deck in place, keeping the current position. A load failure or an
@@ -203,6 +291,13 @@ pub fn terminalSize(fd: posix.fd_t) Size {
         const rc = posix.system.ioctl(fd, posix.T.IOCGWINSZ, @intFromPtr(&ws));
         if (posix.errno(rc) == .SUCCESS and ws.col > 0 and ws.row > 0) {
             return .{ .rows = ws.row, .cols = ws.col };
+        }
+    } else {
+        var info: win.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+        if (win.GetConsoleScreenBufferInfo(fd, &info) != 0) {
+            const cols = info.srWindow.Right - info.srWindow.Left + 1;
+            const rows = info.srWindow.Bottom - info.srWindow.Top + 1;
+            if (cols > 0 and rows > 0) return .{ .rows = @intCast(rows), .cols = @intCast(cols) };
         }
     }
     return .{ .rows = 24, .cols = 80 };
