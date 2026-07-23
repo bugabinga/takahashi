@@ -26,7 +26,7 @@ form** and the **media libraries** it needs.
 | window/graphics libs | `GL X11 Xi Xcursor` | `Cocoa QuartzCore Metal MetalKit` | `gdi32 user32 shell32 ole32 d3d11 dxgi` |
 | text (FreeType+HarfBuzz) | apt `-dev` pkgs | Homebrew | vcpkg / vendored |
 | audio (miniaudio backend) | `pthread m dl` (ALSA) | `CoreFoundation CoreAudio AudioToolbox` | `ole32` (WASAPI) |
-| sokol impl compilation | C | **Objective-C** (`-x objective-c -fobjc-arc`) | C |
+| sokol impl compilation | C | **Objective-C** (`-ObjC`, no ARC) | C |
 
 Images (stb_image) are vendored and portable on every target.
 

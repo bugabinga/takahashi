@@ -23,9 +23,11 @@ pub fn build(b: *std.Build) void {
     });
     sokol_c.addIncludePath(b.path("vendor/sokol"));
     exe_mod.addImport("sokol", sokol_c.createModule());
-    // sokol_app on macOS is Objective-C; the impl unit must be compiled as such.
+    // sokol_app on macOS is Objective-C; compile the impl unit as such with
+    // -ObjC. Do NOT enable ARC — sokol uses manual retain/release, which ARC
+    // forbids (this mirrors how the official sokol-zig bindings build it).
     const sokol_flags: []const []const u8 = if (os == .macos)
-        &.{ "-x", "objective-c", "-fobjc-arc" }
+        &.{"-ObjC"}
     else
         &.{};
     exe_mod.addCSourceFile(.{ .file = b.path("vendor/sokol/sokol.c"), .flags = sokol_flags });
@@ -117,13 +119,14 @@ fn linkWindowSystem(mod: *std.Build.Module, os: std.Target.Os.Tag) void {
             mod.linkSystemLibrary("Xcursor", .{});
         },
         .macos => {
-            mod.linkFramework("Cocoa", .{});
-            mod.linkFramework("QuartzCore", .{});
             mod.linkFramework("Metal", .{});
-            mod.linkFramework("MetalKit", .{});
+            mod.linkFramework("QuartzCore", .{});
+            mod.linkFramework("AppKit", .{});
         },
         .windows => {
-            for ([_][]const u8{ "gdi32", "user32", "shell32", "ole32", "d3d11", "dxgi" }) |lib| {
+            // sokol's D3D11 backend loads d3d11.dll/dxgi.dll at runtime, so only
+            // the win32 windowing libraries are linked (matching sokol-zig).
+            for ([_][]const u8{ "kernel32", "user32", "gdi32", "ole32" }) |lib| {
                 mod.linkSystemLibrary(lib, .{});
             }
         },
