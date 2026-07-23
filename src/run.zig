@@ -9,9 +9,15 @@
 //! is left empty.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const function = @import("function.zig");
+
+// The tests spawn real POSIX utilities by absolute path; Windows has none of
+// them, so they skip there. `@run` itself is cross-platform (it resolves and
+// spawns whatever the deck names) — only these fixtures are POSIX-specific.
+const posix_only = builtin.os.tag == .windows;
 
 pub fn run(
     arena: Allocator,
@@ -78,6 +84,7 @@ fn testIo(threaded: *std.Io.Threaded) std.Io {
 }
 
 test "runs a single command, feeding the source to stdin" {
+    if (posix_only) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();
@@ -91,6 +98,7 @@ test "runs a single command, feeding the source to stdin" {
 }
 
 test "builds a pipeline without a shell" {
+    if (posix_only) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();
@@ -98,9 +106,9 @@ test "builds a pipeline without a shell" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // echo hi | tr a-z A-Z  ->  "HI\n"
+    // echo hi | tr a-z A-Z  ->  "HI\n"  (/bin/echo exists on Linux and macOS)
     const tokens = [_]function.Token{
-        .{ .text = "/usr/bin/echo", .kind = .arg },
+        .{ .text = "/bin/echo", .kind = .arg },
         .{ .text = "hi", .kind = .arg },
         .{ .text = "|", .kind = .pipe },
         .{ .text = "/usr/bin/tr", .kind = .arg },

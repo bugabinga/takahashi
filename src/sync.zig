@@ -13,6 +13,7 @@
 //! filesystem) and robust to start order (either side may launch first).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
@@ -87,6 +88,7 @@ pub const Follower = struct {
 };
 
 test "publisher and follower round-trip an index through the state file" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // uses /tmp
     const gpa = std.testing.allocator;
     var threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();

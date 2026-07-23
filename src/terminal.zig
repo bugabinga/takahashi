@@ -12,9 +12,16 @@
 //! which prints it to its controlling terminal (SPEC 3.1).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
+
+// Raw-mode presentation uses POSIX termios/ioctl, which do not exist on Windows
+// (a Console-API path is future work; see docs/cross-platform.md). On Windows
+// `present` falls back to the non-interactive dump, and the POSIX-only helpers
+// compile to no-ops so the module still builds there.
+const is_posix = builtin.os.tag != .windows;
 
 const document = @import("document.zig");
 const Presentation = @import("presentation.zig").Presentation;
@@ -57,7 +64,7 @@ pub fn present(
 
     const in_tty = stdin.isTty(io) catch false;
     const out_tty = stdout.isTty(io) catch false;
-    if (!in_tty or !out_tty or slides.len == 0) {
+    if (!is_posix or !in_tty or !out_tty or slides.len == 0) {
         try renderDump(w, slides, graphics);
         try w.flush();
         return;
@@ -93,60 +100,68 @@ const Interactive = struct {
 /// key, apply it, repeat until the speaker quits. Terminal state is always
 /// restored by the defers, including on error.
 fn runInteractive(it: Interactive) !void {
-    assert(it.slides.len > 0);
-    const original = try posix.tcgetattr(it.in_fd);
-    try setRaw(it.in_fd, original);
-    defer posix.tcsetattr(it.in_fd, .NOW, original) catch {};
-    try it.w.writeAll(enter_alt ++ hide_cursor);
-    defer {
-        it.w.writeAll(show_cursor ++ leave_alt) catch {};
-        it.w.flush() catch {};
-    }
+    // The whole raw-mode loop is POSIX-only; on Windows the block is
+    // comptime-eliminated, so this compiles to a no-op (and is never reached —
+    // `present` routes Windows to the dump).
+    if (is_posix) {
+        assert(it.slides.len > 0);
+        const original = try posix.tcgetattr(it.in_fd);
+        try setRaw(it.in_fd, original);
+        defer posix.tcsetattr(it.in_fd, .NOW, original) catch {};
+        try it.w.writeAll(enter_alt ++ hide_cursor);
+        defer {
+            it.w.writeAll(show_cursor ++ leave_alt) catch {};
+            it.w.flush() catch {};
+        }
 
-    // Publish the current slide for a `--speaker` companion (best effort).
-    var publisher: ?sync.Publisher = sync.Publisher.init(it.gpa, it.io, it.deck_path) catch null;
-    defer if (publisher) |*p| p.deinit();
-    // Under --watch, reload the deck in place when the file changes (SPEC 2.2).
-    var watcher: ?watch.Watcher = if (it.watch_enabled) watch.Watcher.init(it.io, it.deck_path) else null;
-    var reloaded: ?document.Document = null;
-    defer if (reloaded) |*d| d.deinit();
+        // Publish the current slide for a `--speaker` companion (best effort).
+        var publisher: ?sync.Publisher = sync.Publisher.init(it.gpa, it.io, it.deck_path) catch null;
+        defer if (publisher) |*p| p.deinit();
+        // Under --watch, reload the deck in place when the file changes (SPEC 2.2).
+        var watcher: ?watch.Watcher = if (it.watch_enabled) watch.Watcher.init(it.io, it.deck_path) else null;
+        var reloaded: ?document.Document = null;
+        defer if (reloaded) |*d| d.deinit();
 
-    var slides = it.slides;
-    var show = Presentation.init(slides.len);
-    var frame = std.heap.ArenaAllocator.init(it.gpa);
-    defer frame.deinit();
-    var key: [8]u8 = undefined;
-    while (true) { // interactive loop: bounded only by the quit key
-        assert(show.current < slides.len);
-        if (publisher) |*p| p.publish(show.current);
-        _ = frame.reset(.retain_capacity);
-        try renderSlide(it.w, frame.allocator(), slides, show.current, terminalSize(it.out_fd), it.graphics);
-        try it.w.flush();
+        var slides = it.slides;
+        var show = Presentation.init(slides.len);
+        var frame = std.heap.ArenaAllocator.init(it.gpa);
+        defer frame.deinit();
+        var key: [8]u8 = undefined;
+        while (true) { // interactive loop: bounded only by the quit key
+            assert(show.current < slides.len);
+            if (publisher) |*p| p.publish(show.current);
+            _ = frame.reset(.retain_capacity);
+            try renderSlide(it.w, frame.allocator(), slides, show.current, terminalSize(it.out_fd), it.graphics);
+            try it.w.flush();
 
-        const n = readKey(it.in_fd, &key, watcher != null);
-        if (n > 0) switch (decodeKey(key[0..n])) {
-            .next => show.next(),
-            .prev => show.prev(),
-            .first => show.first(),
-            .last => show.last(),
-            .quit => return,
-            .none => {},
-        };
-        if (watcher) |*wr| if (wr.changed()) {
-            reload(it, &reloaded, &slides, &show);
-        };
+            const n = readKey(it.in_fd, &key, watcher != null);
+            if (n > 0) switch (decodeKey(key[0..n])) {
+                .next => show.next(),
+                .prev => show.prev(),
+                .first => show.first(),
+                .last => show.last(),
+                .quit => return,
+                .none => {},
+            };
+            if (watcher) |*wr| if (wr.changed()) {
+                reload(it, &reloaded, &slides, &show);
+            };
+        }
     }
 }
 
 /// Read key bytes. When watching, wait at most one poll interval so the loop
 /// wakes to check the file; otherwise block until a key arrives.
 fn readKey(fd: posix.fd_t, buffer: []u8, watching: bool) usize {
-    if (watching) {
-        var pfd = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
-        const ready = posix.poll(&pfd, 200) catch return 0;
-        if (ready == 0 or (pfd[0].revents & posix.POLL.IN) == 0) return 0;
+    if (is_posix) {
+        if (watching) {
+            var pfd = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+            const ready = posix.poll(&pfd, 200) catch return 0;
+            if (ready == 0 or (pfd[0].revents & posix.POLL.IN) == 0) return 0;
+        }
+        return posix.read(fd, buffer) catch 0;
     }
-    return posix.read(fd, buffer) catch 0;
+    return 0;
 }
 
 /// Reload the deck in place, keeping the current position. A load failure or an
@@ -167,24 +182,28 @@ fn reload(it: Interactive, reloaded: *?document.Document, slides: *[]const Slide
 /// Put `fd` into a cbreak/raw mode: no line buffering, no echo, no signal or
 /// flow-control interception, one byte minimum per read.
 fn setRaw(fd: posix.fd_t, base: posix.termios) !void {
-    var raw = base;
-    raw.lflag.ICANON = false;
-    raw.lflag.ECHO = false;
-    raw.lflag.ISIG = false; // Ctrl-C arrives as 0x03 -> clean quit, defers run
-    raw.iflag.IXON = false;
-    raw.iflag.ICRNL = false;
-    raw.cc[@intFromEnum(posix.V.MIN)] = 1;
-    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
-    try posix.tcsetattr(fd, .NOW, raw);
+    if (is_posix) {
+        var raw = base;
+        raw.lflag.ICANON = false;
+        raw.lflag.ECHO = false;
+        raw.lflag.ISIG = false; // Ctrl-C arrives as 0x03 -> clean quit, defers run
+        raw.iflag.IXON = false;
+        raw.iflag.ICRNL = false;
+        raw.cc[@intFromEnum(posix.V.MIN)] = 1;
+        raw.cc[@intFromEnum(posix.V.TIME)] = 0;
+        try posix.tcsetattr(fd, .NOW, raw);
+    }
 }
 
 /// The terminal's size in character cells, or a sane default when the query
-/// fails (e.g. no controlling terminal).
+/// fails (e.g. no controlling terminal, or a non-POSIX host).
 pub fn terminalSize(fd: posix.fd_t) Size {
-    var ws: posix.winsize = undefined;
-    const rc = posix.system.ioctl(fd, posix.T.IOCGWINSZ, @intFromPtr(&ws));
-    if (posix.errno(rc) == .SUCCESS and ws.col > 0 and ws.row > 0) {
-        return .{ .rows = ws.row, .cols = ws.col };
+    if (is_posix) {
+        var ws: posix.winsize = undefined;
+        const rc = posix.system.ioctl(fd, posix.T.IOCGWINSZ, @intFromPtr(&ws));
+        if (posix.errno(rc) == .SUCCESS and ws.col > 0 and ws.row > 0) {
+            return .{ .rows = ws.row, .cols = ws.col };
+        }
     }
     return .{ .rows = 24, .cols = 80 };
 }

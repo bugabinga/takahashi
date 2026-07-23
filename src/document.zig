@@ -4,6 +4,7 @@
 //! Images are embedded as data URIs so the HTML form stays self-contained.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const slide_mod = @import("slide.zig");
@@ -170,12 +171,14 @@ fn mimeOf(path: []const u8) []const u8 {
 }
 
 test "substitutes @run output and collects media, then parses markup" {
+    // The test spawns /bin/echo (present on Linux and macOS, absent on Windows).
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();
 
     const src =
-        "Title with @run(/usr/bin/echo hi) and *bold*\n@image(missing.png)@note(speak up)";
+        "Title with @run(/bin/echo hi) and *bold*\n@image(missing.png)@note(speak up)";
     const slides = [_]slide_mod.Slide{.{ .body = src }};
     var doc = try process(gpa, threaded.io(), std.Io.Dir.cwd(), src, "/tmp/x.taka", .{ .slides = &slides });
     defer doc.deinit();

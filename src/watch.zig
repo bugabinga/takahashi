@@ -6,6 +6,7 @@
 //! so a save-in-progress never tears down the presentation.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Signature = struct { mtime_ns: i96, size: u64 };
 
@@ -36,6 +37,7 @@ fn current(io: std.Io, path: []const u8) ?Signature {
 }
 
 test "watcher reports a change after the file grows" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest; // uses /tmp
     const gpa = std.testing.allocator;
     var threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();

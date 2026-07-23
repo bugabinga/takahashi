@@ -32,12 +32,19 @@ Images (stb_image) are vendored and portable on every target.
 
 ## Verification status
 
-- **Linux** — built and tested in CI (`zig build`, `zig build test`,
-  `zig build check`). Fully verified.
-- **macOS / Windows** — the linking above follows sokol's documented backend
-  requirements but has **not yet been verified on those machines**. Building
-  there needs FreeType and HarfBuzz installed (Homebrew / vcpkg) so their
-  headers and import libraries are present.
+CI (`.github/workflows/ci.yml`) runs on Linux, macOS, and Windows:
+
+- **Offline tests** (`zig build test`, `zig build check`) — the pure-Zig core,
+  parser, forms, watch, and sync — pass on **all three** platforms. POSIX-only
+  fixtures (`@run` spawning real utilities, the `/tmp` state/watch files) skip
+  on Windows, where the interactive terminal falls back to the dump.
+- **Full build** (`zig build`, incl. the window form) — verified on **Linux**.
+  On **macOS** it runs but is still being brought up: Homebrew's FreeType/
+  HarfBuzz are found and sokol compiles as Objective-C, but the sokol_app
+  Objective-C unit against the system SDK does not build cleanly yet, so the
+  macOS build job is marked non-blocking.
+- **Windows full build** is not attempted in CI: FreeType/HarfBuzz have no
+  standard system location there (needs vcpkg or vendoring).
 
 ## Remaining work
 
