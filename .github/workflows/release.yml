@@ -10,6 +10,9 @@ on:
 permissions:
   contents: write
 
+env:
+  ZIG_VERSION: 0.16.0
+
 jobs:
   build:
     name: build ${{ matrix.name }}
@@ -19,14 +22,20 @@ jobs:
         include:
           - os: ubuntu-latest
             name: linux-x86_64
+            arch: x86_64-linux
           - os: macos-latest
             name: macos-aarch64
+            arch: aarch64-macos
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+      - name: Install Zig
+        shell: bash
+        run: |
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${{ matrix.arch }}-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+          mkdir -p "$HOME/zig"
+          tar -xf zig.tar.xz -C "$HOME/zig" --strip-components=1
+          echo "$HOME/zig" >> "$GITHUB_PATH"
       - name: Install system libraries (Linux)
         if: runner.os == 'Linux'
         run: |

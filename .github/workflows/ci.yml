@@ -7,6 +7,9 @@ on:
 permissions:
   contents: read
 
+env:
+  ZIG_VERSION: 0.16.0
+
 jobs:
   # Offline core: pure Zig, no system libraries — runs on every platform.
   test:
@@ -18,9 +21,26 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+      - name: Install Zig (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            Linux) arch=x86_64-linux ;;
+            macOS) arch=aarch64-macos ;;
+          esac
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${arch}-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+          mkdir -p "$HOME/zig"
+          tar -xf zig.tar.xz -C "$HOME/zig" --strip-components=1
+          echo "$HOME/zig" >> "$GITHUB_PATH"
+      - name: Install Zig (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "zig-x86_64-windows-$env:ZIG_VERSION"
+          Invoke-WebRequest "https://ziglang.org/download/$env:ZIG_VERSION/$dir.zip" -OutFile zig.zip
+          Expand-Archive zig.zip -DestinationPath $HOME\zig
+          Add-Content -Path $env:GITHUB_PATH -Value "$HOME\zig\$dir"
       - name: Unit and integration tests (offline, headless)
         run: zig build test
       - name: Formatting gate
@@ -38,9 +58,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+      - name: Install Zig
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            Linux) arch=x86_64-linux ;;
+            macOS) arch=aarch64-macos ;;
+          esac
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${arch}-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+          mkdir -p "$HOME/zig"
+          tar -xf zig.tar.xz -C "$HOME/zig" --strip-components=1
+          echo "$HOME/zig" >> "$GITHUB_PATH"
       - name: Install system libraries (Linux)
         if: runner.os == 'Linux'
         run: |
