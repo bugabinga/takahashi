@@ -36,7 +36,7 @@ lines
 listen
 
 # @note is speaker-only prose, synced to the slide in the presenter view.
-@note(Japanese for "Takahashi method". HarfBuzz shapes the glyphs;
+@note(Japanese for "Takahashi method". stb_truetype rasterizes the glyphs;
 say it out loud: taka-hashi.)
 高橋メソッド
 

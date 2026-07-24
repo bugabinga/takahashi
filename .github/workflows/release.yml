@@ -2,7 +2,8 @@ name: Release
 
 # Semi-automatic: pushing a version tag (e.g. v0.1.0) builds each platform and
 # opens a *draft* GitHub release with the archives attached. A human reviews and
-# publishes it. Windows is not built yet (see docs/cross-platform.md).
+# publishes it. Text is vendored (stb_truetype), so no text library is
+# installed; only Linux needs the window/graphics -dev packages.
 on:
   push:
     tags: ['v*']
@@ -36,17 +37,13 @@ jobs:
           mkdir -p "$HOME/zig"
           tar -xf zig.tar.xz -C "$HOME/zig" --strip-components=1
           echo "$HOME/zig" >> "$GITHUB_PATH"
-      - name: Install system libraries (Linux)
+      - name: Install window libraries (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libgl1-mesa-dev libx11-dev libxi-dev libxcursor-dev \
-            libxrandr-dev libxinerama-dev libxext-dev \
-            libfreetype-dev libharfbuzz-dev
-      - name: Install system libraries (macOS)
-        if: runner.os == 'macOS'
-        run: brew install freetype harfbuzz
+            libxrandr-dev libxinerama-dev libxext-dev
       - name: Build (ReleaseFast)
         run: zig build -Doptimize=ReleaseFast
       - name: Package
