@@ -77,6 +77,16 @@ Real fonts, rasterized with stb_truetype — so **CJK just works**:
 
 The full, normative definition lives in [`SPEC.md`](SPEC.md).
 
+<div align="center">
+
+![taka rendering images, CJK, and an image grid](docs/gallery.png)
+
+<sub>Slides from the bundled decks — [`examples/wat`](examples/wat/wat.taka)
+(Gary Bernhardt's *Wat*), the Japanese type from
+[`examples/demo`](examples/demo/demo.taka), and an `@image` grid.</sub>
+
+</div>
+
 ## Four ways to show it
 
 One deck, four renderers:
