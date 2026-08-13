@@ -103,6 +103,7 @@ jobs:
         run: sha256sum taka-* > SHA256SUMS
       - name: Create draft release
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
