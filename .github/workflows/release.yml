@@ -37,12 +37,13 @@ jobs:
             name: macos-aarch64
           - os: windows-2025
             name: windows-x86_64
-          - os: windows-11-arm
+          - os: windows-2025
             name: windows-aarch64
+            target: aarch64-windows
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      - uses: step-security/setup-zig@1e9fbd457bcc3587b58845344a267f12f151709c # v2.2.2
       - name: Install window libraries (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -54,8 +55,12 @@ jobs:
         run: zig build test
       - name: Check formatting
         run: zig build check
-      - name: Build
+      - name: Build native
+        if: matrix.target == null
         run: zig build -Doptimize=ReleaseFast
+      - name: Build target
+        if: matrix.target != null
+        run: zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.target }}
       - name: Package (Unix)
         if: runner.os != 'Windows'
         shell: bash
