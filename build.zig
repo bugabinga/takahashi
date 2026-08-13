@@ -50,6 +50,22 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
+    const release_mod = b.createModule(.{
+        .root_source_file = b.path("release.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const release_exe = b.addExecutable(.{
+        .name = "release",
+        .root_module = release_mod,
+    });
+    const run_release = b.addRunArtifact(release_exe);
+    if (b.args) |args| {
+        run_release.addArgs(args);
+    }
+    const release_step = b.step("release", "Create and push a signed release");
+    release_step.dependOn(&run_release.step);
+
     // Tests and fuzzing are rooted at test.zig, which imports every module that
     // does not touch the window backend. No sokol, no display, no network.
     const test_mod = b.createModule(.{
@@ -94,9 +110,9 @@ pub fn build(b: *std.Build) void {
     // Formatting gate.
     const fmt = b.addFmt(.{
         .paths = &.{
-            "src",                  "build.zig",      "build.zig.zon",
-            "test.zig",             "media_test.zig", "integration_test.zig",
-            "correctness_test.zig", "bench.zig",
+            "src",                  "build.zig",            "build.zig.zon",
+            "test.zig",             "release.zig",          "media_test.zig",
+            "integration_test.zig", "correctness_test.zig", "bench.zig",
         },
         .check = true,
     });

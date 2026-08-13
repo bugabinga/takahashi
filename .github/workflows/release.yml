@@ -16,7 +16,7 @@ jobs:
       - name: Match tag and package versions
         shell: bash
         run: |
-          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
           version=$(sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon)
           [[ "${GITHUB_REF_NAME#v}" == "$version" || "${GITHUB_REF_NAME#v}" == "$version"-* ]]
 
@@ -108,5 +108,6 @@ jobs:
         shell: bash
         run: |
           flags=(--draft --generate-notes --verify-tag)
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
+          version="${GITHUB_REF_NAME%%+*}"
+          if [[ "$version" == *-* ]]; then flags+=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" dist/* "${flags[@]}"

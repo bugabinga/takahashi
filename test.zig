@@ -7,6 +7,7 @@
 //! here.
 
 test {
+    _ = @import("release.zig");
     _ = @import("src/slide.zig");
     _ = @import("src/parser.zig");
     _ = @import("src/cli.zig");
