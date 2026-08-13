@@ -22,7 +22,7 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     const config = cli.parse(args) catch |err| {
         log.err(
-            "usage: takahashi [--to window|terminal|pdf|html] [-o <path>] " ++
+            "usage: taka [--to window|terminal|pdf|html] [-o <path>] " ++
                 "[--watch] [--speaker] <file.taka|->",
             .{},
         );

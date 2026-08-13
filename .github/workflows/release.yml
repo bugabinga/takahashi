@@ -1,54 +1,48 @@
 name: Release
 
-# Semi-automatic: pushing a version tag (e.g. v0.1.0) builds each platform and
-# opens a *draft* GitHub release with the archives attached. A human reviews and
-# publishes it. Text is vendored (stb_truetype), so no text library is
-# installed; only Linux needs the window/graphics -dev packages.
 on:
   push:
-    tags: ['v*']
+    tags: ['v*.*.*']
 
 permissions:
-  contents: write
-
-env:
-  ZIG_VERSION: 0.16.0
+  contents: read
 
 jobs:
+  validate:
+    name: validate tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Match tag and package versions
+        shell: bash
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          version=$(sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon)
+          [[ "${GITHUB_REF_NAME#v}" == "$version" || "${GITHUB_REF_NAME#v}" == "$version"-* ]]
+
   build:
     name: build ${{ matrix.name }}
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             name: linux-x86_64
-            arch: x86_64-linux
-          - os: macos-latest
+          - os: ubuntu-22.04-arm
+            name: linux-aarch64
+          - os: macos-15-intel
+            name: macos-x86_64
+          - os: macos-15
             name: macos-aarch64
-            arch: aarch64-macos
-          - os: windows-latest
+          - os: windows-2025
             name: windows-x86_64
-            arch: x86_64-windows
+          - os: windows-11-arm
+            name: windows-aarch64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Zig (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${{ matrix.arch }}-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
-          mkdir -p "$HOME/zig"
-          tar -xf zig.tar.xz -C "$HOME/zig" --strip-components=1
-          echo "$HOME/zig" >> "$GITHUB_PATH"
-      - name: Install Zig (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $dir = "zig-x86_64-windows-$env:ZIG_VERSION"
-          Invoke-WebRequest "https://ziglang.org/download/$env:ZIG_VERSION/$dir.zip" -OutFile zig.zip
-          Expand-Archive zig.zip -DestinationPath $HOME\zig
-          Add-Content -Path $env:GITHUB_PATH -Value "$HOME\zig\$dir"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
       - name: Install window libraries (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -56,46 +50,57 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgl1-mesa-dev libx11-dev libxi-dev libxcursor-dev \
             libxrandr-dev libxinerama-dev libxext-dev
-      - name: Build (ReleaseFast)
+      - name: Test
+        run: zig build test
+      - name: Check formatting
+        run: zig build check
+      - name: Build
         run: zig build -Doptimize=ReleaseFast
       - name: Package (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          dir="takahashi-${{ github.ref_name }}-${{ matrix.name }}"
+          dir="taka-${GITHUB_REF_NAME}-${{ matrix.name }}"
           mkdir -p "dist/$dir"
-          cp zig-out/bin/takahashi "dist/$dir/"
-          cp README.md SPEC.md LICENSE THIRD-PARTY-NOTICES.md "dist/$dir/"
+          cp zig-out/bin/taka LICENSE THIRD-PARTY-NOTICES.md "dist/$dir/"
           tar -C dist -czf "$dir.tar.gz" "$dir"
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $dir = "takahashi-${{ github.ref_name }}-${{ matrix.name }}"
+          $dir = "taka-$env:GITHUB_REF_NAME-${{ matrix.name }}"
           New-Item -ItemType Directory -Force -Path "dist/$dir" | Out-Null
-          Copy-Item zig-out/bin/takahashi.exe "dist/$dir/"
-          Copy-Item README.md,SPEC.md,LICENSE,THIRD-PARTY-NOTICES.md "dist/$dir/"
+          Copy-Item zig-out/bin/taka.exe,LICENSE,THIRD-PARTY-NOTICES.md "dist/$dir/"
           Compress-Archive -Path "dist/$dir" -DestinationPath "$dir.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: takahashi-${{ matrix.name }}
+          name: ${{ matrix.name }}
           path: |
-            takahashi-*.tar.gz
-            takahashi-*.zip
+            taka-*.tar.gz
+            taka-*.zip
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
 
   release:
     name: draft release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: artifacts
+          path: dist
+          merge-multiple: true
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum taka-* > SHA256SUMS
       - name: Create draft release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          generate_release_notes: true
-          files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          flags=(--draft --generate-notes --verify-tag)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" dist/* "${flags[@]}"

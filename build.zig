@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const exe = b.addExecutable(.{ .name = "takahashi", .root_module = exe_mod });
+    const exe = b.addExecutable(.{ .name = "taka", .root_module = exe_mod });
     const os = target.result.os.tag;
 
     // Window output form (SPEC 3.1): the vendored sokol single-header C

@@ -6,7 +6,7 @@
 // nothing — see docs/window-backend.md for the rationale.
 .{
     .name = .takahashi,
-    .version = "0.0.1",
+    .version = "0.0.0",
     .fingerprint = 0xf83ba002c397a298,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
