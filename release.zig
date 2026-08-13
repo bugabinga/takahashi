@@ -44,10 +44,10 @@ fn release(arena: std.mem.Allocator, io: std.Io, request: []const u8) !void {
                 "release request '{s}' is neither patch, minor, major, nor valid SemVer",
                 .{request},
             ),
-            error.VersionNotIncreasing => {
+            error.VersionDecreasing => {
                 const requested = std.SemanticVersion.parse(request) catch unreachable;
                 std.log.err(
-                    "requested release {f} is not newer than current {f}",
+                    "requested release {f} is older than current {f}",
                     .{ requested, field.version },
                 );
                 if (requested.major == field.version.major and
@@ -122,7 +122,7 @@ fn selectVersion(current: std.SemanticVersion, request: []const u8) !std.Semanti
     else
         try std.SemanticVersion.parse(request);
 
-    if (current.order(target) != .lt) return error.VersionNotIncreasing;
+    if (current.order(target) == .gt) return error.VersionDecreasing;
     assert(target.pre == null or target.pre.?.len > 0);
     assert(target.build == null or target.build.?.len > 0);
     return target;
@@ -246,8 +246,11 @@ fn createRelease(arena: std.mem.Allocator, io: std.Io, tag: []const u8) !void {
 
     try runCommand(io, &.{ "git", "add", "--", manifest_path });
     const message = try std.fmt.allocPrint(arena, "release: {s}", .{tag});
-    runCommand(io, &.{ "git", "commit", "-S", "-m", message }) catch |err| {
-        std.log.err("commit failed; retry: git commit -S -m \"release: {s}\"", .{tag});
+    runCommand(io, &.{ "git", "commit", "-S", "--allow-empty", "-m", message }) catch |err| {
+        std.log.err(
+            "commit failed; retry: git commit -S --allow-empty -m \"release: {s}\"",
+            .{tag},
+        );
         return err;
     };
     runCommand(io, &.{ "git", "tag", "-s", tag, "-m", tag }) catch |err| {
@@ -341,26 +344,28 @@ test "selects named bumps and clears suffixes" {
     try std.testing.expectFmt("2.0.0", "{f}", .{try selectVersion(current, "major")});
 }
 
-test "accepts only increasing explicit versions" {
+test "accepts current or newer explicit versions" {
     const current = try std.SemanticVersion.parse("0.1.0-alpha.1");
     try std.testing.expectFmt(
         "0.1.0-beta.1+build.4",
         "{f}",
         .{try selectVersion(current, "0.1.0-beta.1+build.4")},
     );
-    try std.testing.expectError(
-        error.VersionNotIncreasing,
-        selectVersion(current, "0.1.0-alpha.1"),
+    try std.testing.expectFmt(
+        "0.1.0-alpha.1",
+        "{f}",
+        .{try selectVersion(current, "0.1.0-alpha.1")},
     );
-    try std.testing.expectError(error.VersionNotIncreasing, selectVersion(current, "0.0.9"));
+    try std.testing.expectError(error.VersionDecreasing, selectVersion(current, "0.0.9"));
     try std.testing.expectError(error.InvalidVersion, selectVersion(current, "beta"));
 }
 
-test "build metadata does not create precedence" {
+test "build metadata may change without decreasing precedence" {
     const current = try std.SemanticVersion.parse("1.0.0+build.1");
-    try std.testing.expectError(
-        error.VersionNotIncreasing,
-        selectVersion(current, "1.0.0+build.2"),
+    try std.testing.expectFmt(
+        "1.0.0+build.2",
+        "{f}",
+        .{try selectVersion(current, "1.0.0+build.2")},
     );
 }
 
