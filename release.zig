@@ -39,7 +39,33 @@ fn release(arena: std.mem.Allocator, io: std.Io, request: []const u8) !void {
     const source = try dir.readFileAlloc(io, manifest_path, arena, .limited(1024 * 1024));
     const field = try parseVersionField(source);
     const target = selectVersion(field.version, request) catch |err| {
-        std.log.err("invalid release version: {s}", .{@errorName(err)});
+        switch (err) {
+            error.InvalidVersion => std.log.err(
+                "release request '{s}' is neither patch, minor, major, nor valid SemVer",
+                .{request},
+            ),
+            error.VersionNotIncreasing => {
+                const requested = std.SemanticVersion.parse(request) catch unreachable;
+                std.log.err(
+                    "requested release {f} is not newer than current {f}",
+                    .{ requested, field.version },
+                );
+                if (requested.major == field.version.major and
+                    requested.minor == field.version.minor and
+                    requested.patch == field.version.patch and
+                    requested.pre != null and field.version.pre == null)
+                {
+                    std.log.err(
+                        "SemVer prereleases precede their matching stable version; bump first",
+                        .{},
+                    );
+                }
+            },
+            error.Overflow, error.VersionOverflow => std.log.err(
+                "release request '{s}' exceeds the supported version range",
+                .{request},
+            ),
+        }
         return err;
     };
     const target_text = try std.fmt.allocPrint(arena, "{f}", .{target});
